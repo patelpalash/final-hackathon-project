@@ -425,21 +425,22 @@ def generate_pdf():
         ('PADDING', (0, 0), (-1, -1), 4.5),
     ]))
     story.append(metric_table)
-    story.append(Spacer(1, 14))
 
-    # -------------------------------------------------------------
-    # 7. EXECUTION & ACTIVE SERVICES
-    # -------------------------------------------------------------
-    story.append(Paragraph("7. Access & Active Services", h1_style))
-    story.append(HRFlowable(width="100%", thickness=1, color=c_yellow, spaceAfter=8))
-    story.append(Paragraph("• <b>Frontend Dashboard:</b> <font color='#002F6C'><u>http://127.0.0.1:5175/</u></font> (React 18 SPA)", bullet_style))
-    story.append(Paragraph("• <b>Backend API & Swagger Docs:</b> <font color='#002F6C'><u>http://127.0.0.1:8003/docs</u></font> (FastAPI OpenAPI)", bullet_style))
-    story.append(Paragraph("• <b>PowerPoint Presentation:</b> <code>F:\\dachser-live-transit-planner\\DACHSER_Live_Transit_Planner_Presentation_v2.pptx</code>", bullet_style))
-    story.append(Paragraph("• <b>Interactive Browser Slide Deck:</b> <code>F:\\dachser-live-transit-planner\\presentation.html</code>", bullet_style))
-    story.append(Spacer(1, 8))
-
-    doc.build(story, canvasmaker=NumberedCanvas)
-    print(f"Documentation PDF generated successfully: {pdf_path}")
+    try:
+        doc.build(story, canvasmaker=NumberedCanvas)
+        print(f"Documentation PDF generated successfully: {pdf_path}")
+    except PermissionError:
+        pdf_path_v2 = os.path.join(os.path.dirname(__file__), "DACHSER_Live_Transit_Planner_Documentation_v2.pdf")
+        doc_v2 = SimpleDocTemplate(
+            pdf_path_v2,
+            pagesize=letter,
+            leftMargin=54,
+            rightMargin=54,
+            topMargin=54,
+            bottomMargin=54
+        )
+        doc_v2.build(story, canvasmaker=NumberedCanvas)
+        print(f"Original file was open in a viewer. Saved updated PDF to: {pdf_path_v2}")
 
 if __name__ == "__main__":
     generate_pdf()
