@@ -1,0 +1,33 @@
+# Virtual Environment & Runtime
+.runtime/
+.venv/
+venv/
+ENV/
+env/
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.vite/
+frontend/.vite/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*.local

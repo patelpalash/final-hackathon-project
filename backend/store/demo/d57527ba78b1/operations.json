@@ -1,0 +1,19 @@
+{
+  "weather": [],
+  "events": [
+    {
+      "kind": "traffic",
+      "origin": "R16",
+      "destination": "R21",
+      "start": "2026-09-22T00:00:00+00:00",
+      "end": "2026-09-24T00:00:00+00:00",
+      "minutes": 180,
+      "reason": "DEMO: direct-connection congestion, +180 minutes",
+      "id": "demo-traffic",
+      "updated_at": "2026-09-19T22:00:59.379957+00:00"
+    }
+  ],
+  "decisions": [],
+  "revision": 1,
+  "schedules": []
+}

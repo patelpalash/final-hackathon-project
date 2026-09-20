@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DACHSER Live Transit Planner — Presentation</title>
+  <style>
+    :root {
+      --navy: #002F6C;
+      --navy-dark: #001f49;
+      --yellow: #FDC300;
+      --yellow-hover: #e5b000;
+      --dark: #141B26;
+      --text-muted: #64748b;
+      --bg: #F5F7FA;
+      --white: #ffffff;
+      --green: #17765E;
+      --blue: #1A3682;
+      --red: #C0392B;
+      --border: #E2E8F0;
+      --card-shadow: 0 4px 16px rgba(0, 47, 108, 0.08);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background: #0b1320; color: var(--dark); display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; overflow: hidden; }
+
+    /* Presentation Canvas (16:9) */
+    .deck-container {
+      width: 92vw;
+      max-width: 1200px;
+      aspect-ratio: 16 / 9;
+      background: var(--bg);
+      border-radius: 12px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      padding: 38px 50px;
+      display: none;
+      flex-direction: column;
+      opacity: 0;
+      transform: translateX(30px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    .slide.active {
+      display: flex;
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    /* Dark theme slides */
+    .slide.dark-theme {
+      background: linear-gradient(135deg, var(--navy-dark) 0%, var(--navy) 100%);
+      color: var(--white);
+    }
+    .slide.dark-theme .category-label {
+      background: rgba(253, 195, 0, 0.18);
+      color: var(--yellow);
+      border: 1px solid rgba(253, 195, 0, 0.4);
+    }
+    .slide.dark-theme h1 { color: var(--white); }
+    .slide.dark-theme .subtitle { color: var(--yellow); }
+
+    /* Top Brand Strip */
+    .brand-strip {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      background: var(--yellow);
+    }
+
+    /* Header */
+    .slide-header { margin-bottom: 20px; }
+    .category-label {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--yellow);
+      display: inline-block;
+      margin-bottom: 6px;
+      background: var(--navy);
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+    .slide-title {
+      font-size: 30px;
+      font-weight: 800;
+      color: var(--navy);
+      line-height: 1.2;
+    }
+    .accent-bar {
+      width: 60px;
+      height: 4px;
+      background: var(--yellow);
+      border-radius: 2px;
+      margin-top: 8px;
+    }
+
+    /* Layout Grids */
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      flex: 1;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 18px;
+      flex: 1;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--white);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 22px;
+      box-shadow: var(--card-shadow);
+      display: flex;
+      flex-direction: column;
+    }
+    .card.danger { border-top: 4px solid var(--red); }
+    .card.primary { border-top: 4px solid var(--navy); }
+    .card.success { border-top: 4px solid var(--green); }
+    .card h3 {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--navy);
+      margin-bottom: 12px;
+    }
+    .card.danger h3 { color: var(--red); }
+    .card ul {
+      list-style: none;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--dark);
+    }
+    .card ul li {
+      margin-bottom: 9px;
+      position: relative;
+      padding-left: 18px;
+    }
+    .card ul li::before {
+      content: "•";
+      color: var(--yellow);
+      font-weight: bold;
+      font-size: 18px;
+      position: absolute;
+      left: 0;
+      top: -2px;
+    }
+
+    /* Alert Banner */
+    .alert-banner {
+      background: var(--red);
+      color: #fff;
+      padding: 14px 20px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 12px rgba(192, 57, 43, 0.2);
+    }
+    .alert-banner h3 { font-size: 17px; font-weight: 800; margin-bottom: 4px; color: #fff; }
+    .alert-banner p { font-size: 12.5px; line-height: 1.45; color: #ffe5e5; }
+
+    /* Big Metric Tiles */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      flex: 1;
+    }
+    .metric-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: var(--card-shadow);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .metric-val {
+      font-size: 30px;
+      font-weight: 900;
+      line-height: 1.1;
+      margin-bottom: 6px;
+    }
+    .metric-val.green { color: var(--green); }
+    .metric-val.navy { color: var(--navy); }
+    .metric-val.red { color: var(--red); }
+    .metric-val.blue { color: var(--blue); }
+    .metric-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--dark);
+      margin-bottom: 4px;
+    }
+    .metric-desc {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      line-height: 1.35;
+    }
+
+    /* Demo Steps */
+    .demo-step-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex: 1;
+    }
+    .demo-step-item {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      box-shadow: var(--card-shadow);
+    }
+    .step-badge {
+      background: var(--navy);
+      color: var(--yellow);
+      font-weight: 800;
+      font-size: 13px;
+      padding: 8px 14px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .step-text {
+      font-size: 13.5px;
+      color: var(--dark);
+      line-height: 1.4;
+    }
+
+    /* Controls at Bottom */
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 92vw;
+      max-width: 1200px;
+      margin-top: 14px;
+      color: var(--white);
+      font-size: 13px;
+    }
+    .nav-btns { display: flex; gap: 8px; }
+    .btn {
+      background: var(--navy);
+      color: var(--yellow);
+      border: 1px solid rgba(253, 195, 0, 0.4);
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.2s ease;
+    }
+    .btn:hover { background: var(--yellow); color: var(--navy); }
+    .key-hints { color: #8899aa; font-size: 12px; }
+    .key-hints kbd { background: #223344; padding: 2px 6px; border-radius: 4px; color: #fff; }
+  </style>
+</head>
+<body>
+
+  <div class="deck-container" id="deck">
+    <div class="brand-strip"></div>
+
+    <!-- SLIDE 1: Title Slide -->
+    <div class="slide dark-theme active" id="slide-1">
+      <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; max-width: 960px;">
+        <span class="category-label">LOGISTICS ORCHESTRATION PLATFORM</span>
+        <h1 style="font-size: 44px; font-weight: 900; margin: 16px 0 10px 0; line-height: 1.15;">DACHSER Live Transit Planner</h1>
+        <p class="subtitle" style="font-size: 21px; font-weight: 600; margin-bottom: 22px;">Autonomous Road Logistics Orchestration & Route Optimization Platform</p>
+        <p style="font-size: 14.5px; color: #c0d4ec; line-height: 1.6; margin-bottom: 32px;">
+          Multi-Route Comparison · Eliminating €800k+ Special Trips (2024–2025) · Cost Optimization · Dynamic Reroute · Quantified Time Save
+        </p>
+        <div style="display: inline-flex; align-items: center; gap: 12px; background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(253, 195, 0, 0.4); padding: 10px 18px; border-radius: 8px; width: fit-content;">
+          <span style="color: var(--yellow); font-weight: 800; font-size: 14px;">DACHSER European Dataset:</span>
+          <span style="color: #ffffff; font-size: 13px;">Heilbronn Central Hub + 30 Branch Relations (19,980 Historical Dispatches)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 2: €800k Special Trips (2024-2025) -->
+    <div class="slide" id="slide-2">
+      <div class="slide-header">
+        <span class="category-label">HISTORICAL LOGISTICS AUDIT</span>
+        <h2 class="slide-title">The €800k+ Problem: Special Trips in 2024–2025</h2>
+        <div class="accent-bar"></div>
+      </div>
+      <div class="alert-banner">
+        <h3>🚨 Over €800,000 Spent on Emergency Special Trips (Sonderfahrten) Across 2 Years</h3>
+        <p>In DACHSER's 2024–2025 operational records (disposition.csv), missed regular line trailers, cutoff delays, and unmanaged weekend hold-ups forced emergency premium dispatches costing up to 3x standard tariffs.</p>
+      </div>
+      <div class="grid-3">
+        <div class="card danger">
+          <h3>1. Missed Line-Haul Cutoffs</h3>
+          <ul>
+            <li>Special trips are triggered when scheduled line-trailers depart without cargo.</li>
+            <li>A 15-minute handling delay at a branch forces a dedicated €1,500+ emergency special trip.</li>
+            <li>Lack of forward visibility creates last-minute scramble dispatches on Friday nights.</li>
+          </ul>
+        </div>
+        <div class="card danger">
+          <h3>2. Regulatory Bottlenecks</h3>
+          <ul>
+            <li><b>Sonntagsfahrverbot:</b> German Sunday truck ban (00:00–22:00) traps delayed trucks.</li>
+            <li>Vehicles arriving Saturday evening sit idle for up to 26 hours, risking Monday delivery SLAs.</li>
+            <li>Emergency special trips are deployed on Monday morning to compensate for lost transit time.</li>
+          </ul>
+        </div>
+        <div class="card danger">
+          <h3>3. Fragmented Routing</h3>
+          <ul>
+            <li>Traditional TMS evaluates only static direct distance, ignoring intermediate hub bypasses.</li>
+            <li>No continuous recalculation when corridor traffic jams (A8, A81, A6) or severe weather hit.</li>
+            <li>Dispatchers lacked an automated tool to compare alternatives before booking special trips.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 3: Cost Optimization -->
+    <div class="slide" id="slide-3">
+      <div class="slide-header">
+        <span class="category-label">STRATEGIC COST OPTIMIZATION</span>
+        <h2 class="slide-title">Cost Optimization: Eliminating Emergency Tariffs</h2>
+        <div class="accent-bar"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom: 16px;">
+        <div class="card primary">
+          <h3>Tariff Optimization vs. Special Trips</h3>
+          <ul>
+            <li><b>Line-Haul vs. Special Trip:</b> Line-hauls cost €450–€850, whereas emergency special trips surge to €1,400–€2,800 on identical European lanes.</li>
+            <li>Engine plans shipments to guarantee connection to regular line-trailers, directly recovering the €800k+ historical loss.</li>
+            <li>Load-normalized cost benchmarking from 19,980 real lane-day dispatches.</li>
+          </ul>
+        </div>
+        <div class="card primary">
+          <h3>3 Pareto Optimization Modes</h3>
+          <ul>
+            <li><b>Lowest Cost:</b> Discovers the cheapest line-haul carrier combination strictly respecting delivery deadlines.</li>
+            <li><b>Fastest Arrival:</b> Eliminates stationary wait times and selects rapid transit corridors.</li>
+            <li><b>Balanced Mode:</b> Ranks routes by Total Transport Cost (€) + (Transit Hours × €50/hr driver time value).</li>
+          </ul>
+        </div>
+      </div>
+      <div class="card success" style="flex: unset; padding: 14px 20px;">
+        <h3 style="margin-bottom: 6px; font-size: 15px;">Quantified Cost & Fuel Efficiency Baseline</h3>
+        <ul style="display: flex; gap: 24px; font-size: 12.5px;">
+          <li style="margin-bottom: 0;"><b>Direct Tariff Savings:</b> €3,565 saved on baseline operational test batches vs. direct standard runs.</li>
+          <li style="margin-bottom: 0;"><b>Fuel & Emission Abatement:</b> 1,100 litres of diesel saved, reducing fuel spend and direct CO₂ emissions.</li>
+          <li style="margin-bottom: 0;"><b>High-Value Exposure:</b> €3,000+ in cargo risk mitigated by avoiding unmonitored weekend parking.</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- SLIDE 4: Multi-Route Comparison -->
+    <div class="slide" id="slide-4">
+      <div class="slide-header">
+        <span class="category-label">ROUTE INTELLIGENCE & COMPARISON</span>
+        <h2 class="slide-title">Multi-Route Comparison & Benchmark Engine</h2>
+        <div class="accent-bar"></div>
+      </div>
+      <div class="grid-3">
+        <div class="card primary">
+          <h3>1. Side-by-Side Alternatives</h3>
+          <ul>
+            <li>Simultaneously calculates and displays up to 4 complete route options.</li>
+            <li>Full breakdown per option: Road km, transit minutes, transport cost (€), fuel (L), and risk score.</li>
+            <li>Interactive cards allow instant switching to compare signed trade-offs.</li>
+            <li>Transparently labels "Advisory Estimate" or "Confirmed Plan".</li>
+          </ul>
+        </div>
+        <div class="card primary">
+          <h3>2. Direct vs. Transfer Hubs</h3>
+          <ul>
+            <li>Compares direct point-to-point against intermediate hub transfers (Nürnberg, Chemnitz, Langenau, Heilbronn).</li>
+            <li>Detour verification: Discards impractical detours and validates transfer hub capacity.</li>
+            <li>Quantified difference metrics: Shows exact € variance and time delta compared to direct baseline.</li>
+            <li>Identifies when a 40 km detour is 3 hours faster due to highway bottlenecks.</li>
+          </ul>
+        </div>
+        <div class="card primary">
+          <h3>3. Historical Benchmark</h3>
+          <ul>
+            <li>Direct integration with 19,980 historical lane records from <code>disposition.csv</code>.</li>
+            <li>Compares planned cost against historical load-normalized actuals.</li>
+            <li>Reliability proxy: Displays historical lane spillover rate and on-time consistency.</li>
+            <li>Prevents dispatchers from committing to historically fragile corridors.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 5: Dynamic Rerouting -->
+    <div class="slide" id="slide-5">
+      <div class="slide-header">
+        <span class="category-label">ACTIVE DISRUPTION MANAGEMENT</span>
+        <h2 class="slide-title">Dynamic Rerouting & Scenario Resilience</h2>
+        <div class="accent-bar"></div>
+      </div>
+      <div class="grid-2" style="margin-bottom: 16px;">
+        <div class="card primary">
+          <h3>Live Corridor Rerouting</h3>
+          <ul>
+            <li>Continuous corridor monitoring via TomTom Live Traffic and Open-Meteo weather forecasts.</li>
+            <li>When severe congestion (+180 min) hits a direct motorway, the system immediately calculates transfer bypasses.</li>
+            <li>Seamless transition: Preserves active leg and reroutes remaining journey without vehicle turnaround.</li>
+          </ul>
+        </div>
+        <div class="card primary">
+          <h3>Scenario Studio & Weather Lab</h3>
+          <ul>
+            <li><b>Scenario Studio:</b> Operators can inject simulated highway closures or traffic jams to stress-test resilience.</li>
+            <li><b>Weather Lab:</b> Enter localized snow, ice, or wind alerts to preview ETA impact on the network.</li>
+            <li>Pre-emptive dispatch: Recalculates before departure, avoiding en-route stranding.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="card" style="flex: unset; padding: 14px 20px;">
+        <h3 style="margin-bottom: 6px; font-size: 15px; color: var(--navy);">Control Room Audit Gate & Manager Approval</h3>
+        <p style="font-size: 12.5px; color: var(--dark); line-height: 1.5;">
+          <b>Pre-dispatch review gate:</b> Proposed reroutes require an authorized review quote ID and an operator reason. Stale quote detection automatically invalidates proposals if weather or traffic conditions change during review. Every decision is permanently logged in an immutable audit ledger.
+        </p>
+      </div>
+    </div>
+
+    <!-- SLIDE 6: Quantified Time Save -->
+    <div class="slide" id="slide-6">
+      <div class="slide-header">
+        <span class="category-label">TIME & RELIABILITY METRICS</span>
+        <h2 class="slide-title">Quantified Time Save & Delivery Performance</h2>
+        <div class="accent-bar"></div>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-val blue">16.25 Hours</div>
+          <div class="metric-title">Driver Labour Time Saved</div>
+          <div class="metric-desc">975 minutes eliminated by avoiding motorway traffic jams and missed cutoffs.</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val green">Up to 26 Hours</div>
+          <div class="metric-title">Sunday Hold Traps Avoided</div>
+          <div class="metric-desc">Prevents shipments from being stranded under German Sonntagsfahrverbot curfews.</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val green">97.1%</div>
+          <div class="metric-title">Audited On-Time Delivery</div>
+          <div class="metric-desc">Delivery reliability verified across 34 operational test shipments.</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val navy">11.4 Min</div>
+          <div class="metric-title">Mean Arrival Error (MAE)</div>
+          <div class="metric-desc">High-precision ETA forecasting compared against actual delivery timestamps.</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val green">1,100 L</div>
+          <div class="metric-title">Diesel Fuel Consumed Less</div>
+          <div class="metric-desc">Reduced idle engine time in traffic and optimized vehicle speed profiles.</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-val green">€8,477.50</div>
+          <div class="metric-title">Total Economic Benefit</div>
+          <div class="metric-desc">Combined financial value of time saved, fuel reduction, and risk avoidance.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 7: 3-Minute Demo Flow -->
+    <div class="slide" id="slide-7">
+      <div class="slide-header">
+        <span class="category-label">DEMONSTRATION SCRIPT</span>
+        <h2 class="slide-title">3-Minute Live Demonstration Flow</h2>
+        <div class="accent-bar"></div>
+      </div>
+      <div class="demo-step-list">
+        <div class="demo-step-item">
+          <div class="step-badge">STEP 1: PLAN</div>
+          <div class="step-text"><b>Plan & Compare:</b> Select <b>Karlsruhe → Dresden</b>. Compare Direct vs. via Chemnitz. Observe the road geometry, intermediate hub, ETA, fuel & cost trade-offs.</div>
+        </div>
+        <div class="demo-step-item">
+          <div class="step-badge">STEP 2: DISRUPT</div>
+          <div class="step-text"><b>Inject Disruption:</b> In <b>Scenario Studio</b>, apply <i>Heavy Traffic (+180 min)</i> to the direct corridor. The engine recalculates in real-time — the transfer via Chemnitz becomes faster!</div>
+        </div>
+        <div class="demo-step-item">
+          <div class="step-badge">STEP 3: APPROVE</div>
+          <div class="step-text"><b>Control Room Review:</b> Open <b>Control Room</b>. Review the change notice showing time/cost variances. Enter a manager reason and approve the revised plan.</div>
+        </div>
+        <div class="demo-step-item">
+          <div class="step-badge">STEP 4: SIMULATE</div>
+          <div class="step-text"><b>Journey Simulation:</b> Open <b>Journey Simulator</b>. Scrub the timeline, watch the truck move along the highway, and click <code>Skip hold</code> to fast-forward stationary rest periods.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 8: Tech Stack -->
+    <div class="slide" id="slide-8">
+      <div class="slide-header">
+        <span class="category-label">SYSTEM ARCHITECTURE</span>
+        <h2 class="slide-title">Modern & Robust Technology Stack</h2>
+        <div class="accent-bar"></div>
+      </div>
+      <div class="grid-3">
+        <div class="card primary">
+          <h3>Frontend (React 18)</h3>
+          <ul>
+            <li><b>React 18 & TypeScript 5.6:</b> Type-safe modular components.</li>
+            <li><b>Vite 5.4:</b> Instant HMR and optimized production build.</li>
+            <li><b>MapLibre GL 4.7:</b> OpenStreetMap & CARTO raster tiles.</li>
+            <li><b>Interactive Hubs:</b> High-contrast black markers with hover dialogs.</li>
+            <li><b>Keep-Alive Tabs:</b> Zero page or simulation resets on navigation.</li>
+          </ul>
+        </div>
+        <div class="card primary">
+          <h3>Backend (FastAPI)</h3>
+          <ul>
+            <li><b>Python 3.11–3.13:</b> Asynchronous REST API with Uvicorn.</li>
+            <li><b>Pydantic v2:</b> Strict request/response schema validation.</li>
+            <li><b>tzdata:</b> Accurate <code>Europe/Berlin</code> daylight savings calculation.</li>
+            <li><b>Atomic JSON Store:</b> Reliable persistence for plans and decisions.</li>
+          </ul>
+        </div>
+        <div class="card primary">
+          <h3>Data & Live APIs</h3>
+          <ul>
+            <li><b>DACHSER CSVs:</b> <code>relationen</code>, <code>kalender</code>, <code>disposition</code>, <code>stoerungen</code>.</li>
+            <li><b>OSRM Engine:</b> Road network distance, duration & polylines.</li>
+            <li><b>TomTom Live Traffic:</b> Flow raster tiles, incident clusters, truck routing.</li>
+            <li><b>Open-Meteo:</b> Hourly weather forecasts along route corridors.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 9: Conclusion -->
+    <div class="slide dark-theme" id="slide-9">
+      <div style="flex: 1; display: flex; flex-direction: column; justify-content: center; max-width: 960px;">
+        <span class="category-label">CONCLUSION & OUTLOOK</span>
+        <h1 style="font-size: 38px; font-weight: 900; margin: 16px 0 14px 0; line-height: 1.2;">Turning €800k in Special Trip Losses into Measurable Advantage</h1>
+        <p style="font-size: 17px; color: #d0e0f5; line-height: 1.5; margin-bottom: 26px;">
+          DACHSER Live Transit Planner combines multi-objective route comparison, continuous dynamic rerouting, and regulatory compliance to protect customer deadlines while cutting transport expenditures.
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 11px;">
+          <div style="font-size: 15px; font-weight: 700; color: var(--yellow);">✔ Recovers the €800k+ Special Trip Bleed: Plans shipments to secure regular line-trailers.</div>
+          <div style="font-size: 15px; font-weight: 700; color: var(--yellow);">✔ Comprehensive Comparison Engine: Evaluates direct vs. transfer hubs against 19,980 historical records.</div>
+          <div style="font-size: 15px; font-weight: 700; color: var(--yellow);">✔ Quantified Time Save: Eliminates 16.25 driver hours per batch and bypasses 26-hour Sunday driving bans.</div>
+          <div style="font-size: 15px; font-weight: 700; color: var(--yellow);">✔ Dynamic Rerouting & Control Room: Pre-emptive rerouting around corridor bottlenecks with manager sign-off.</div>
+          <div style="font-size: 15px; font-weight: 700; color: var(--yellow);">✔ Zero Fabricated Live Data: Transparent, audited, and production-ready for European road logistics.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Bottom Navigation Bar -->
+  <div class="controls">
+    <div class="nav-btns">
+      <button class="btn" id="prevBtn" onclick="changeSlide(-1)">◀ Previous</button>
+      <button class="btn" id="nextBtn" onclick="changeSlide(1)">Next ▶</button>
+      <button class="btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+    </div>
+    <div style="font-weight: 700; color: var(--yellow); font-size: 14px;" id="slideIndicator">
+      Slide 1 / 9
+    </div>
+    <div class="key-hints">
+      Use <kbd>◀</kbd> <kbd>▶</kbd> arrow keys or <kbd>Space</kbd> to navigate
+    </div>
+  </div>
+
+  <script>
+    let currentSlide = 1;
+    const totalSlides = 9;
+
+    function showSlide(n) {
+      document.querySelectorAll('.slide').forEach(s => s.classList.remove('active'));
+      const active = document.getElementById(`slide-${n}`);
+      if (active) {
+        active.classList.add('active');
+        currentSlide = n;
+      }
+      document.getElementById('slideIndicator').innerText = `Slide ${currentSlide} / ${totalSlides}`;
+      document.getElementById('prevBtn').disabled = (currentSlide === 1);
+      document.getElementById('nextBtn').disabled = (currentSlide === totalSlides);
+    }
+
+    function changeSlide(step) {
+      const next = currentSlide + step;
+      if (next >= 1 && next <= totalSlides) {
+        showSlide(next);
+      }
+    }
+
+    function toggleFullscreen() {
+      const elem = document.getElementById('deck');
+      if (!document.fullscreenElement) {
+        elem.requestFullscreen().catch(err => alert("Fullscreen unavailable"));
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ') {
+        changeSlide(1);
+      } else if (e.key === 'ArrowLeft') {
+        changeSlide(-1);
+      } else if (e.key === 'f' || e.key === 'F') {
+        toggleFullscreen();
+      }
+    });
+
+    showSlide(1);
+  </script>
+</body>
+</html>

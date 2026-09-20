@@ -1,0 +1,138 @@
+{
+  "weather": [
+    {
+      "start": "2026-09-20T10:10:00Z",
+      "end": "2026-09-20T16:10:00Z",
+      "node": "R16",
+      "temperature_c": 4.0,
+      "condition": "Heavy Snow",
+      "rain_mm": 0.0,
+      "snow_cm": 5.0,
+      "visibility_m": 500.0,
+      "wind_kmh": 35.0,
+      "severity": "HIGH",
+      "id": "565a40f061c1",
+      "updated_at": "2026-09-20T10:11:10.935820+00:00"
+    }
+  ],
+  "events": [
+    {
+      "start": "2026-09-19T22:37:00Z",
+      "end": "2026-09-26T22:37:00Z",
+      "kind": "closure",
+      "node": "HN",
+      "origin": null,
+      "destination": null,
+      "minutes": 90,
+      "reason": "Political / operational closure at selected facility",
+      "id": "0f21d26973be",
+      "updated_at": "2026-09-19T22:37:52.075008+00:00"
+    }
+  ],
+  "decisions": [
+    {
+      "shipment_id": "SHP-879191",
+      "action": "accept",
+      "option": 0,
+      "revision": 1,
+      "reason": "Demo review: approve the Chemnitz alternative after the direct-connection traffic scenario.",
+      "acknowledge_deadline": false,
+      "path": [
+        "R16",
+        "R30",
+        "R21"
+      ],
+      "eta": "2026-09-21T19:06:00+00:00",
+      "previous_route": [
+        "R16",
+        "R30",
+        "R21"
+      ],
+      "id": "ac2b269df0f1",
+      "updated_at": "2026-09-19T16:19:44.285404+00:00"
+    },
+    {
+      "shipment_id": "SHP-C89A17",
+      "action": "accept",
+      "option": 0,
+      "revision": 1,
+      "quote_id": "f5ab67bd6ccc43868709b539d195bc71",
+      "reason": "Judge demo: accept the N\u00fcrnberg transfer to reduce delay after the simulated direct-connection congestion.",
+      "acknowledge_deadline": false,
+      "path": [
+        "R16",
+        "R10",
+        "R21"
+      ],
+      "eta": "2026-09-22T18:43:00+00:00",
+      "reviewed_path": [
+        "R16",
+        "R10",
+        "R21"
+      ],
+      "reviewed_eta": "2026-09-22T18:43:00+00:00",
+      "data_kind": "demo",
+      "previous_route": [
+        "R16",
+        "R21"
+      ],
+      "id": "d4e61db6467c",
+      "updated_at": "2026-09-19T22:08:01.542239+00:00"
+    },
+    {
+      "shipment_id": "SHP-A4F9A0",
+      "action": "accept",
+      "option": 0,
+      "revision": 47,
+      "quote_id": "2fc4e2bbdd2e499a9a56717f4f4d05ab",
+      "reason": "perfect",
+      "acknowledge_deadline": false,
+      "path": [
+        "R16",
+        "R21"
+      ],
+      "eta": "2026-09-21T03:30:00+00:00",
+      "reviewed_path": [
+        "R16",
+        "R21"
+      ],
+      "reviewed_eta": "2026-09-21T03:30:00+00:00",
+      "data_kind": "user",
+      "previous_route": [
+        "R16",
+        "R21"
+      ],
+      "id": "1cee93a0c638",
+      "updated_at": "2026-09-20T09:57:37.220863+00:00"
+    },
+    {
+      "shipment_id": "SHP-1548F6",
+      "action": "accept",
+      "option": 0,
+      "revision": 47,
+      "quote_id": "35f4dea4faf64bf58eca2a0acd303a6b",
+      "reason": "fastest",
+      "acknowledge_deadline": false,
+      "path": [
+        "R16",
+        "R21"
+      ],
+      "eta": "2026-09-21T03:30:00+00:00",
+      "reviewed_path": [
+        "R16",
+        "R21"
+      ],
+      "reviewed_eta": "2026-09-21T03:30:00+00:00",
+      "data_kind": "user",
+      "previous_route": [
+        "R16",
+        "R21"
+      ],
+      "id": "a8d4f7acc988",
+      "updated_at": "2026-09-20T10:08:56.937947+00:00"
+    }
+  ],
+  "revision": 50,
+  "hub_delays": {},
+  "schedules": []
+}
