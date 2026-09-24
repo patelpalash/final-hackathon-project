@@ -30,6 +30,7 @@ from .risk import assess
 from .shipments import Shipments, plan as plan_options, savings_vs_baseline
 from . import savings as savings_engine
 from .simulate import reroute as simulate_reroute
+from .map_tiles import router as map_tiles_router
 
 from pathlib import Path
 DATA_DIR = os.environ.get("DATA_DIR", str(Path(__file__).resolve().parents[2] / "data" / "raw"))
@@ -78,6 +79,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DACHSER Live Transit Planner", version="3.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(map_tiles_router)
 
 
 def serialized(fn):
@@ -119,6 +121,7 @@ class ShipmentReq(BaseModel):
     optimization: Literal["fastest","cost","balanced"] = "fastest"
     truck: TruckReq = Field(default_factory=TruckReq)
     selected_path: Optional[list[str]] = None
+    selected_route_id: Optional[str] = None
     origin: str
     destination: str
     weight_kg: float = Field(default=8000, gt=0, le=23800)
@@ -408,6 +411,43 @@ def operations():
     result["weather"] = [evaluate(r) for r in result["weather"]]
     result["thresholds"] = THRESHOLDS
     return result
+
+class WeatherZoneReq(BaseModel):
+    kind: Literal["snow", "rain", "tornado"]
+    lat: float = Field(ge=-85, le=85)
+    lon: float = Field(ge=-180, le=180)
+    radius_km: float = Field(default=18, ge=3, le=80)
+    start: AwareDatetime
+    end: AwareDatetime
+
+    @model_validator(mode="after")
+    def check_window(self):
+        if self.end <= self.start: raise ValueError("Zone end must follow its start")
+        return self
+
+
+@app.post("/api/weather-zones")
+@serialized
+def add_weather_zone(req: WeatherZoneReq):
+    row=S["operations"].put("weather_zones", req.model_dump(mode="json"))
+    _audit("weather_zone_created",f"Simulated {row['kind']} zone · radius {row['radius_km']} km","MANUAL MAP SIMULATION")
+    return row
+
+
+@app.put("/api/weather-zones/{rid}")
+@serialized
+def edit_weather_zone(rid: str, req: WeatherZoneReq):
+    if not any(z["id"]==rid for z in S["operations"].data["weather_zones"]): raise HTTPException(404,"Unknown weather zone")
+    return S["operations"].put("weather_zones", req.model_dump(mode="json"), rid)
+
+
+@app.delete("/api/weather-zones/{rid}")
+@serialized
+def delete_weather_zone(rid: str):
+    if not any(z["id"]==rid for z in S["operations"].data["weather_zones"]): raise HTTPException(404,"Unknown weather zone")
+    S["operations"].remove("weather_zones",rid)
+    return {"ok":True}
+
 
 @app.post("/api/weather-records")
 @serialized

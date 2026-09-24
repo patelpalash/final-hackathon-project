@@ -26,6 +26,10 @@
       "detail": "Open-Meteo hourly forecasts are sampled at estimated passage times along each leg, cached for 15 minutes and displayed with source/validity. Missing or stale data is labelled. Manual observations remain supported. Worst active condition per leg determines assumed weather impact: HIGH severity, visibility below 1000 m, wind at least 60 km/h or heavy snow adds 120 minutes; medium conditions add 45 minutes. These delays are prototype rules, not measured impacts."
     },
     {
+      "title": "Interactive weather map simulation",
+      "detail": "Snow, heavy rain and tornado zones are manually placed what-if scenarios, not live weather detections. A road leg touching an active zone gains an assumed delay of 110, 65 or 180 minutes respectively. The planner tries nearby waypoint arcs and offers the shortest returned road candidate that clears every active zone by 2 km. A route is never labelled clear without verified road geometry. This local search does not guarantee the globally shortest detour. ETA, distance and fuel use the returned road line; known-lane detours include an explicit distance-based scenario surcharge."
+    },
+    {
       "title": "Calendar coverage",
       "detail": "kalender.csv contains Baden-Württemberg holidays, applied uniformly as a prototype simplification. This is not a complete country/state legal compliance engine. Sunday is a full-day business restriction; other stored holiday windows end at 22:00."
     },

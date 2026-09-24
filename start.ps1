@@ -3,7 +3,8 @@ $plannerRoot = $PSScriptRoot
 $plannerRuntime = Join-Path $plannerRoot '.runtime'
 New-Item -ItemType Directory -Force -Path $plannerRuntime | Out-Null
 $plannerPython = Join-Path $plannerRuntime 'venv\Scripts\python.exe'
-$workspacePython = Join-Path $plannerRoot '..\..\.venv\Scripts\python.exe'
+$workspacePython = Join-Path $plannerRoot '..\.venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $workspacePython)) { $workspacePython = Join-Path $plannerRoot '..\..\.venv\Scripts\python.exe' }
 if (-not (Test-Path -LiteralPath $plannerPython)) {
     if (Test-Path -LiteralPath $workspacePython) { $plannerPython = (Resolve-Path -LiteralPath $workspacePython).Path }
     else {
@@ -27,11 +28,11 @@ if (-not $env:TOMTOM_API_KEY -and (Test-Path -LiteralPath $plannerTrafficSecret)
 $env:DATA_DIR = Join-Path $plannerRoot 'data\raw'
 $env:STORE_DIR = Join-Path $plannerRoot 'backend\store'
 $env:VITE_API_BASE = '/api'
-if (-not (Get-NetTCPConnection -LocalPort 8003 -State Listen -ErrorAction SilentlyContinue)) {
-    Start-Process -FilePath $plannerPython -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8003') -WorkingDirectory (Join-Path $plannerRoot 'backend') -WindowStyle Hidden -RedirectStandardOutput (Join-Path $plannerRuntime 'backend.log') -RedirectStandardError (Join-Path $plannerRuntime 'backend-error.log') | Out-Null
-} else { Write-Host 'Port 8003 is already running; leaving that process in place.' }
-if (-not (Get-NetTCPConnection -LocalPort 5175 -State Listen -ErrorAction SilentlyContinue)) {
-    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-Command','& npm.cmd run dev -- --host 127.0.0.1 --port 5175 --strictPort') -WorkingDirectory $plannerFrontend -WindowStyle Hidden -RedirectStandardOutput (Join-Path $plannerRuntime 'frontend.log') -RedirectStandardError (Join-Path $plannerRuntime 'frontend-error.log') | Out-Null
-} else { Write-Host 'Port 5175 is already running; leaving that process in place.' }
-Write-Host 'Open http://127.0.0.1:5175/ once both services are ready.'
+if (-not (Get-NetTCPConnection -LocalPort 8004 -State Listen -ErrorAction SilentlyContinue)) {
+    Start-Process -FilePath $plannerPython -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8004') -WorkingDirectory (Join-Path $plannerRoot 'backend') -WindowStyle Hidden -RedirectStandardOutput (Join-Path $plannerRuntime 'backend.log') -RedirectStandardError (Join-Path $plannerRuntime 'backend-error.log') | Out-Null
+} else { Write-Host 'Port 8004 is already running; leaving that process in place.' }
+if (-not (Get-NetTCPConnection -LocalPort 5176 -State Listen -ErrorAction SilentlyContinue)) {
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-Command','& npm.cmd run dev -- --host 127.0.0.1 --port 5176 --strictPort') -WorkingDirectory $plannerFrontend -WindowStyle Hidden -RedirectStandardOutput (Join-Path $plannerRuntime 'frontend.log') -RedirectStandardError (Join-Path $plannerRuntime 'frontend-error.log') | Out-Null
+} else { Write-Host 'Port 5176 is already running; leaving that process in place.' }
+Write-Host 'Open http://127.0.0.1:5176/ once both services are ready.'
 

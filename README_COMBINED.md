@@ -4,8 +4,8 @@ This version combines the Codex-style planner, Scenario Studio and manager workf
 
 ## Open the running version
 
-- Frontend: http://127.0.0.1:5175/
-- Backend API docs: http://127.0.0.1:8003/docs
+- Frontend: http://127.0.0.1:5176/
+- Backend API docs: http://127.0.0.1:8004/docs
 - Run `powershell -File .\start.ps1` from this folder to start locally. Requires Node/npm and Python 3.11–3.13. Dependencies install on first launch. Logs go in `.runtime`.
 
 ## Judge demo (3 minutes)
@@ -17,6 +17,8 @@ This version combines the Codex-style planner, Scenario Studio and manager workf
 5. In Weather lab enter Heavy Snow, visibility 500 m, wind 35 km/h, HIGH severity at a route facility. Choose an observation window covering the planned journey. Save or edit the record. The common weather engine generates the alert and route delay; dashboard and hubs show matching alerts. LOW/clear records can resolve the alert without a live API key.
 6. Use Load Saturday demo. Select Via Chemnitz (when OSRM supplies this corridor). Show Saturday arrival, Weekend Hold through Sunday, and Monday onward movement.
 7. Show Network intelligence and Assumptions to explain exactly which inputs are measured, derived or simulated.
+
+For the interactive weather demo, calculate a live route, choose **Heavy snow**, **Heavy rain**, or **Tornado** in **Weather simulation**, then drag it onto the map or use **Place on route**. The circle and animated effect mark a manually simulated area. The planner recalculates the affected ETA, checks provider road geometry against every active zone with a 2 km margin, and ranks the shortest verified candidate detour. Drag a zone pin to move it, select a zone to change its radius, or remove it. If no provider route clears the zones, the UI says so and keeps the affected option visible. These are what-if conditions, not detected storms.
 
 ## Fixes and implementation
 
@@ -34,13 +36,15 @@ This version combines the Codex-style planner, Scenario Studio and manager workf
 
 The dataset does not provide timed departure schedules or measured hub processing times. City coordinates, the original Heilbronn central-hub mapping, and branch transfer eligibility are assumptions. Stuttgart is a clearly documented supplementary demonstration hub. OSRM uses standard road routing, not truck-certified routing. Historical reliability is derived from spillover, not actual arrival-time accuracy. The holiday simplification is not a jurisdiction-complete legal engine. Full Sunday hold is a requested BUSINESS rule.
 
-TomTom traffic integration requires a backend TOMTOM_API_KEY. Without a key, traffic is NOT_CONFIGURED and routing falls back to OSRM. Open-Meteo forecast weather works without a key. Scenario traffic/political closures and manually entered weather are explicitly manual/simulated. Political closures affect a facility, not an unmodelled entire road corridor. External routing needs internet; offline routes are clearly labelled approximate and return no unverified intermediate hub. No shipment is actually dispatched. Manager authorization here is a demo role, without login.
+TomTom traffic integration requires a backend TOMTOM_API_KEY. Without a key, the map uses labelled simulated traffic and routing falls back to OSRM. Open-Meteo forecast weather works without a key. Scenario traffic/political closures and manually entered weather are explicitly manual/simulated. Political closures affect a facility, not an unmodelled entire road corridor. External routing needs internet; offline routes are clearly labelled approximate and return no unverified intermediate hub. No shipment is actually dispatched. Manager authorization here is a demo role, without login.
 
 Storage is local JSON for a single backend process. Saved plans/events/weather/decisions survive restart. The ordinary activity feed is in-memory. Existing older saved shipments can be recalculated from Control room. Replanning is intentionally limited to pre-dispatch shipments. Estimates may have positive and negative trade-offs; savings are not guaranteed.
 
 ## Live map, optimization and historical comparison
 
 - Map layers: weather, traffic flow, incidents and facilities. Click markers for source, conditions and timestamps; click alternatives to compare. Fit route, fullscreen and manual refresh are available.
+- OpenStreetMap tiles are served on demand through the local backend and cached for seven days, so the browser can render the basemap even when direct tile requests fail. OpenFreeMap Liberty and Positron are key-free alternatives in the map selector. Map style changes restore the road and weather overlays.
+- When a simulated weather zone causes a verified detour, the map highlights the affected road and a decision card compares distance, ETA, fuel and transport cost against driving through the zone. The weather delay remains a labelled manual assumption; public OSRM geometry is not truck-certified.
 - Forecast preview: planned passage, now, +3/+6/+12 hours. Preview changes only the overlay; current traffic layers are hidden for future previews.
 - Planner ETAs refresh every 2 minutes while the page is active and inputs are unchanged. The selected alternative is preserved if still available. Saved plans are not silently dispatched or replaced.
 - Weather samples use Open-Meteo hourly forecasts, cached for 15 minutes. Severity-to-delay rules remain prototype assumptions. Unavailable/out-of-range forecasts are labelled.

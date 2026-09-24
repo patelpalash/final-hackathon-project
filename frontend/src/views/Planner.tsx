@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, ArrowRightLeft, MapPin, Route, ShieldCheck, Loader2, Save } from "lucide-react";
 import { api } from "../api/client";
-import type { NetNode, RouteResp, Operations } from "../api/types";
+import type { NetNode, RouteResp, Operations, WeatherZoneInput } from "../api/types";
 import { RouteCompare } from "../components/RouteCompare";
 import { ServiceSettings } from "../components/ServiceSettings";
 import { JudgeDemo } from "../components/JudgeDemo";
@@ -20,15 +20,16 @@ export function Planner({nodes,revision,onChange,onReview}:{nodes:NetNode[];revi
  const [truck,setTruck]=useState({height_m:4,width_m:2.55,length_m:16.5,gross_weight_kg:40000});
  const requestId=useRef(0);const lastBody=useRef<Parameters<typeof api.route>[0]|null>(null);
  const running=useRef(false),mounted=useRef(true),latestBody=useRef("");
+ const preferClear=useRef(false);
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;requestId.current++}},[]);
  const body=()=>({origin,destination:dest,depart_at:new Date(depart).toISOString(),required_delivery:deadline?new Date(deadline).toISOString():undefined,weight_kg:Number(weight),value_eur:Number(value),optimization,truck});
  try{latestBody.current=JSON.stringify(body())}catch{latestBody.current="invalid"}
  async function go(automatic=false){
   if(running.current)return;running.current=true;
   const id=++requestId.current;setLoading(true);setErr("");if(!automatic)setMessage("");
-  const selectedPath=resp?.options[selected]?.path.join("-");
+  const selectedRoute=resp?.options[selected]?.route_id;
   try{const b=body();const key=JSON.stringify(b);const r=await api.route(b);
-   if(mounted.current&&id===requestId.current&&key===latestBody.current){setResp(r);setSelected(automatic?Math.max(0,r.options.findIndex(o=>o.path.join("-")===selectedPath)):0);lastBody.current=b}
+   if(mounted.current&&id===requestId.current&&key===latestBody.current){setResp(r);setSelected(automatic?Math.max(0,r.options.findIndex(o=>preferClear.current?o.avoidance_status==="CLEAR":o.route_id===selectedRoute)):0);preferClear.current=false;lastBody.current=b}
   }catch(e){if(mounted.current&&id===requestId.current)setErr(String(e))}
   finally{running.current=false;if(mounted.current&&id===requestId.current)setLoading(false)}
  }
@@ -36,7 +37,15 @@ export function Planner({nodes,revision,onChange,onReview}:{nodes:NetNode[];revi
  useEffect(()=>{let active=true;api.operations().then(r=>{if(active)setOps(r)}).catch(e=>{if(active)setErr(String(e))});return()=>{active=false}},[revision]);
  useEffect(()=>{if(resp&&resp.revision!==revision&&JSON.stringify(lastBody.current)===latestBody.current) void go(true)},[revision]);
  async function scenarioChanged(){const o=await api.operations();setOps(o);onChange();if(!resp)await go()}
- async function save(recommended=false){setSaving(true);setErr("");try{const b=lastBody.current;if(!b)throw Error("Calculate a route first");const ship=await api.createShipment({...b,planned_departure:b.depart_at,selected_path:resp?.options[recommended?0:selected]?.path});setMessage(`${ship.id} saved. It is listed below and in the control room review queue.`);setSaveTick(n=>n+1);onChange()}catch(e){setErr(String(e))}finally{setSaving(false)}}
+ async function weatherChanged(preferClearRoute=true){preferClear.current=preferClearRoute;const o=await api.operations();setOps(o);onChange();await go(true)}
+ async function addZone(body:WeatherZoneInput){await api.addWeatherZone(body);await weatherChanged()}
+ async function updateZone(id:string,body:WeatherZoneInput){await api.updateWeatherZone(id,body);await weatherChanged()}
+ async function deleteZone(id:string){await api.deleteWeatherZone(id);await weatherChanged(false)}
+ async function cancelWeatherZones(ids:string[]){
+  try{for(const id of ids) await api.deleteWeatherZone(id)}
+  finally{await weatherChanged(false)}
+ }
+ async function save(recommended=false){setSaving(true);setErr("");try{const b=lastBody.current;if(!b)throw Error("Calculate a route first");const chosen=resp?.options[recommended?0:selected];const ship=await api.createShipment({...b,planned_departure:b.depart_at,selected_path:chosen?.path,selected_route_id:chosen?.route_id});setMessage(`${ship.id} saved. It is listed below and in the control room review queue.`);setSaveTick(n=>n+1);onChange()}catch(e){setErr(String(e))}finally{setSaving(false)}}
  function weekendDemo(){setDepart("2026-09-19T08:00");setDeadline("2026-09-22T18:00");setOrigin("R16");setDest("R21");setResp(null);setMessage("Saturday demo loaded. Calculate routes to see any intermediate-hub Weekend Hold.")}
  const dirty=resp&&JSON.stringify(lastBody.current)!==JSON.stringify((()=>{try{return body()}catch{return null}})());
  const refreshLatest=useRef(()=>{});refreshLatest.current=()=>{if(resp&&!dirty&&!loading&&!saving&&!document.hidden)void go(true)};
@@ -48,7 +57,7 @@ export function Planner({nodes,revision,onChange,onReview}:{nodes:NetNode[];revi
  <ServiceSettings nodes={nodes} origin={origin} destination={dest} onChange={onChange}/>
  <JudgeDemo nodes={nodes} onReview={onReview} onChange={onChange}/>
  <ScenarioStudio nodes={nodes} origin={origin} destination={dest} start={(()=>{try{return new Date(depart).toISOString()}catch{return new Date().toISOString()}})()} ops={ops} onChange={scenarioChanged}/>
- {resp?<section className={`card results-card ${loading?"is-updating":""}`}>{dirty&&<div className="notice notice--warn">Inputs changed. Calculate again to update these results.</div>}<RouteCompare nodes={nodes} options={resp.options} savings={resp.savings} selected={selected} onSelect={setSelected} onRefresh={()=>{if(!loading)void go(true)}} deadline={deadline?new Date(deadline).toISOString():null} truck={truck} onScenario={()=>{void scenarioChanged()}}/><div className="results-actions"><span><ShieldCheck size={16}/> ETAs refresh every 2 minutes while this page is active. Human approval before dispatch.</span><button className="btn btn--ghost" onClick={onReview}>Open control room</button><button className="btn btn--ghost" disabled={saving||loading||!!dirty||resp.revision!==revision} onClick={()=>save(true)}>Save recommended</button><button className="btn" disabled={saving||loading||!!dirty||resp.revision!==revision} onClick={()=>save(false)}><Save size={15}/>{saving?"Saving…":"Save plan for review"}</button></div></section>:<div className="planner-empty"><MapPin size={26}/><h3>Your next delivery promise starts here.</h3><p>Choose a route to compare road geometry, arrival times and operational trade-offs.</p></div>}
+ {resp?<section className={`card results-card ${loading?"is-updating":""}`}>{dirty&&<div className="notice notice--warn">Inputs changed. Calculate again to update these results.</div>}<RouteCompare nodes={nodes} options={resp.options} savings={resp.savings} selected={selected} onSelect={setSelected} onRefresh={()=>{if(!loading)void go(true)}} deadline={deadline?new Date(deadline).toISOString():null} truck={truck} onScenario={()=>{void scenarioChanged()}} weatherZones={ops?.weather_zones} onAddWeatherZone={addZone} onUpdateWeatherZone={updateZone} onDeleteWeatherZone={deleteZone} onCancelWeatherZones={cancelWeatherZones}/><div className="results-actions"><span><ShieldCheck size={16}/> ETAs refresh every 2 minutes while this page is active. Human approval before dispatch.</span><button className="btn btn--ghost" onClick={onReview}>Open control room</button><button className="btn btn--ghost" disabled={saving||loading||!!dirty||resp.revision!==revision} onClick={()=>save(true)}>Save recommended</button><button className="btn" disabled={saving||loading||!!dirty||resp.revision!==revision} onClick={()=>save(false)}><Save size={15}/>{saving?"Saving…":"Save plan for review"}</button></div></section>:<div className="planner-empty"><MapPin size={26}/><h3>Your next delivery promise starts here.</h3><p>Choose a route to compare road geometry, arrival times and operational trade-offs.</p></div>}
  <SavedJourneys nodes={nodes} refreshKey={saveTick} onReview={onReview}/>
  </>
 }

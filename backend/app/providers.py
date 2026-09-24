@@ -100,14 +100,18 @@ class RoutingProvider(Provider):
         self.legs = {}
 
     def leg(self, from_ll, to_ll):
-        key = (tuple(from_ll), tuple(to_ll))
+        return self.via(from_ll,to_ll,[])
+
+    def via(self, from_ll, to_ll, via):
+        key = tuple(tuple(p) for p in [from_ll,*via,to_ll])
         cached = self.legs.get(key)
         if cached and time.time()-cached[0] < (86400 if cached[1].get("geometry") else 30):
             return cached[1]
         self.last_attempt = _now()
         try:
             import httpx
-            url = f"https://router.project-osrm.org/route/v1/driving/{from_ll[1]},{from_ll[0]};{to_ll[1]},{to_ll[0]}"
+            stops=";".join(f"{lon},{lat}" for lat,lon in [from_ll,*via,to_ll])
+            url = f"https://router.project-osrm.org/route/v1/driving/{stops}"
             r = httpx.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=3.0)
             r.raise_for_status()
             route = r.json()["routes"][0]

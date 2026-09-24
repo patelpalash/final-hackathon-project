@@ -1,4 +1,4 @@
-import type { Service, Performance, NetworkDoc, Hub, Provider, Holiday, AuditEvent, RouteResp, Shipment, Dashboard, SavingsResp, RerouteResp, HighValue, RelationStat, Disruption, OperationalDelay, MapConditions, TruckProfile, Operations, WeatherInput, WeatherRecord, ScenarioEvent, Decision } from "./types";
+import type { Service, Performance, NetworkDoc, Hub, Provider, Holiday, AuditEvent, RouteResp, Shipment, Dashboard, SavingsResp, RerouteResp, HighValue, RelationStat, Disruption, OperationalDelay, MapConditions, TruckProfile, Operations, WeatherInput, WeatherRecord, WeatherZoneInput, WeatherZone, ScenarioEvent, Decision } from "./types";
 export const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 async function req<T>(p: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${BASE}${p}`, { headers: { "Content-Type": "application/json" }, ...init });
@@ -15,6 +15,9 @@ export const api = {
   demoDisruption:(id:string)=>req<Shipment>(`/demo/${id}/disruption`,{method:"POST"}),
   mapConditions: (geometry:number[][], at:string) => req<MapConditions>("/map-conditions",{method:"POST",body:JSON.stringify({geometry,at})}),
   operations: () => req<Operations>("/operations"),
+  addWeatherZone:(body:WeatherZoneInput)=>req<WeatherZone>("/weather-zones",{method:"POST",body:JSON.stringify(body)}),
+  updateWeatherZone:(id:string,body:WeatherZoneInput)=>req<WeatherZone>(`/weather-zones/${id}`,{method:"PUT",body:JSON.stringify(body)}),
+  deleteWeatherZone:(id:string)=>req<{ok:boolean}>(`/weather-zones/${id}`,{method:"DELETE"}),
   assumptions: () => req<{title: string; items: {title:string; detail:string}[]}>("/assumptions"),
   saveWeather: (body: WeatherInput, id?: string) => req<WeatherRecord>(id ? `/weather-records/${id}` : "/weather-records", {method: id ? "PUT" : "POST", body: JSON.stringify(body)}),
   deleteWeather: (id: string) => req(`/weather-records/${id}`, {method:"DELETE"}),

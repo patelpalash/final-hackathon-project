@@ -3,9 +3,10 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { CloudSun, RefreshCw, Expand, LocateFixed, Car, TriangleAlert, Key, X, ExternalLink } from "lucide-react";
 import { api, BASE } from "../api/client";
-import type { NetNode, RouteOption, MapConditions, LiveWeather, AppSettings, Incident } from "../api/types";
+import type { NetNode, RouteOption, MapConditions, LiveWeather, AppSettings, Incident, WeatherZone, WeatherZoneInput } from "../api/types";
 import { dt, hm } from "../lib";
 import type { SimView } from "./JourneySimulator";
+import { MapWeatherSimulation } from "./MapWeatherSimulation";
 
 function buildHubPopupHtml(
   n: NetNode,
@@ -135,62 +136,14 @@ function buildHubPopupHtml(
 
 export type BasemapId = "voyager" | "positron" | "osm";
 
-export const BASEMAPS: Record<BasemapId, { name: string; spec: maplibregl.StyleSpecification }> = {
+export const BASEMAPS: Record<BasemapId, { name: string; spec: maplibregl.StyleSpecification | string }> = {
   voyager: {
-    name: "CARTO Voyager",
-    spec: {
-      version: 8,
-      sources: {
-        "carto-voyager": {
-          type: "raster",
-          tiles: [
-            "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-            "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-            "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-            "https://d.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-          ],
-          tileSize: 256,
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        },
-      },
-      layers: [
-        {
-          id: "carto-voyager-layer",
-          type: "raster",
-          source: "carto-voyager",
-          minzoom: 0,
-          maxzoom: 20,
-        },
-      ],
-    },
+    name: "OpenFreeMap Liberty",
+    spec: "https://tiles.openfreemap.org/styles/liberty",
   },
   positron: {
-    name: "CARTO Positron",
-    spec: {
-      version: 8,
-      sources: {
-        "carto-positron": {
-          type: "raster",
-          tiles: [
-            "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-            "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-            "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-            "https://d.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-          ],
-          tileSize: 256,
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        },
-      },
-      layers: [
-        {
-          id: "carto-positron-layer",
-          type: "raster",
-          source: "carto-positron",
-          minzoom: 0,
-          maxzoom: 20,
-        },
-      ],
-    },
+    name: "OpenFreeMap Positron",
+    spec: "https://tiles.openfreemap.org/styles/positron",
   },
   osm: {
     name: "OpenStreetMap",
@@ -199,14 +152,17 @@ export const BASEMAPS: Record<BasemapId, { name: string; spec: maplibregl.StyleS
       sources: {
         "osm": {
           type: "raster",
-          tiles: [
-            "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-          ],
+          tiles: [`${BASE.replace(/\/$/, "")}/map-tiles/{z}/{x}/{y}.png`],
           tileSize: 256,
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         },
       },
       layers: [
+        {
+          id: "map-background",
+          type: "background",
+          paint: { "background-color": "#e7eee7" },
+        },
         {
           id: "osm-layer",
           type: "raster",
@@ -234,28 +190,48 @@ function popup(text: string) {
   return new maplibregl.Popup({ offset: 15, maxWidth: "280px" }).setText(text);
 }
 
+const EMPTY_ZONES: WeatherZone[] = [];
+
 export function LiveMap({
   demo = false,
   nodes,
   path,
   geometry,
+  comparisonGeometry,
   alternatives = [],
   onSelect,
   routeWeather = [],
   trafficSections = [],
   onRefresh,
   sim,
+  weatherZones = EMPTY_ZONES,
+  plannedStart,
+  plannedEnd,
+  avoidanceStatus,
+  onAddWeatherZone,
+  onUpdateWeatherZone,
+  onDeleteWeatherZone,
+  onCancelWeatherZones,
 }: {
   demo?: boolean;
   nodes: NetNode[];
   path: string[];
   geometry?: number[][] | null;
+  comparisonGeometry?: number[][] | null;
   alternatives?: RouteOption[];
   onSelect?: (i: number) => void;
   routeWeather?: LiveWeather[];
   trafficSections?: { geometry: number[][]; delay_minutes: number; description: string }[];
   onRefresh?: () => void;
   sim?: SimView;
+  weatherZones?: WeatherZone[];
+  plannedStart?: string;
+  plannedEnd?: string;
+  avoidanceStatus?: RouteOption["avoidance_status"];
+  onAddWeatherZone?: (zone: WeatherZoneInput) => Promise<void>;
+  onUpdateWeatherZone?: (id: string, zone: WeatherZoneInput) => Promise<void>;
+  onDeleteWeatherZone?: (id: string) => Promise<void>;
+  onCancelWeatherZones?: (ids: string[]) => Promise<void>;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const shell = useRef<HTMLDivElement | null>(null);
@@ -271,13 +247,29 @@ export function LiveMap({
   onSelectRef.current = onSelect;
 
   const [fallback, setFallback] = useState(!hasWebGL());
-  const [basemap, setBasemap] = useState<BasemapId>("osm");
+  const [basemap, setBasemap] = useState<BasemapId>("voyager");
+  const activeBasemap = useRef<BasemapId>("voyager");
+  const failedBasemaps = useRef(new Set<BasemapId>());
   const [styleVersion, setStyleVersion] = useState(0);
   const [ready, setReady] = useState(false);
   const [data, setData] = useState<MapConditions | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
+
+  const recoverBasemap = useCallback(() => {
+    const failed = activeBasemap.current;
+    if (failedBasemaps.current.has(failed)) return;
+    failedBasemaps.current.add(failed);
+    const next: BasemapId = failed === "osm" ? "voyager" : "osm";
+    if (failedBasemaps.current.has(next)) {
+      setError("Road-map providers unavailable. Showing the route without a basemap.");
+      setFallback(true);
+    } else {
+      setError(`${BASEMAPS[failed].name} unavailable. Switched to ${BASEMAPS[next].name}.`);
+      setBasemap(next);
+    }
+  }, []);
 
   const [wx, setWx] = useState(true);
   const [traffic, setTraffic] = useState(true);
@@ -337,7 +329,7 @@ export function LiveMap({
 
   // Fit bounds when route changes or map becomes ready, but never during simulation frame updates
   const lastFitted = useRef("");
-  const pathKey = useMemo(() => path.join("-") + (geometry?.length ? `-${geometry.length}` : ""), [path, geometry]);
+  const pathKey = useMemo(() => `${path.join("-")}:${conditionsKey}`, [path, conditionsKey]);
   useEffect(() => {
     if (!ready || !map.current) return;
     if (lastFitted.current === pathKey) return;
@@ -374,6 +366,7 @@ export function LiveMap({
     if (fallback || !ref.current) return;
     setReady(false);
     loadedMap.current = null;
+    activeBasemap.current = basemap;
     let m: maplibregl.Map;
     try {
       m = new maplibregl.Map({
@@ -389,17 +382,21 @@ export function LiveMap({
     }
     map.current = m;
 
-    m.on("load", () => {
+    m.on("style.load", () => {
       loadedMap.current = m;
+      lastFitted.current = "";
       setReady(true);
+      setStyleVersion((v) => v + 1);
     });
 
     m.on("error", (e) => {
       const message = String(e.error?.message ?? "");
       if (/traffic-tiles/.test(message)) {
         setError("Traffic layer unavailable. Road routes remain visible.");
-      } else if (!m.isStyleLoaded() && /style|fetch|network/i.test(message)) {
-        setFallback(true);
+      } else if (activeBasemap.current === "osm"
+        ? /map-tiles/.test(message) || (e as { sourceId?: string }).sourceId === "osm"
+        : /tiles\.openfreemap\.org/.test(message) || (!m.isStyleLoaded() && /style|fetch|network/i.test(message))) {
+        recoverBasemap();
       }
     });
 
@@ -418,19 +415,26 @@ export function LiveMap({
       m.remove();
       map.current = null;
     };
-  }, [fallback]);
+  }, [fallback, recoverBasemap]);
+
+  useEffect(() => {
+    if (fallback || ready || !map.current) return;
+    const timer = window.setTimeout(recoverBasemap, 10000);
+    return () => window.clearTimeout(timer);
+  }, [fallback, ready, basemap, recoverBasemap]);
 
   // Handle switching basemaps
   useEffect(() => {
     const m = map.current;
-    if (!m || !ready || loadedMap.current !== m) return;
+    if (!m || activeBasemap.current === basemap) return;
     try {
-      m.setStyle(BASEMAPS[basemap].spec);
-      const onStyleData = () => {
-        setStyleVersion((v) => v + 1);
-      };
-      m.once("styledata", onStyleData);
-    } catch {}
+      activeBasemap.current = basemap;
+      loadedMap.current = null;
+      setReady(false);
+      m.setStyle(BASEMAPS[basemap].spec, { diff: false });
+    } catch {
+      setError("Map style could not be changed. Try another style.");
+    }
   }, [basemap]);
 
   // Vector sources and layers setup
@@ -446,6 +450,12 @@ export function LiveMap({
         source: "alternatives",
         paint: { "line-color": "#82909c", "line-width": 5, "line-opacity": 0.45 },
       });
+    }
+
+    if (!m.getSource("weather-comparison")) {
+      m.addSource("weather-comparison", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addLayer({ id: "weather-comparison-line", type: "line", source: "weather-comparison",
+        paint: { "line-color": "#d86135", "line-width": 5, "line-opacity": 0.95, "line-dasharray": [2, 1.4] } });
     }
 
     if (!m.getSource("route")) {
@@ -510,7 +520,7 @@ export function LiveMap({
         features: coords.length > 1 ? [{ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } }] : [],
       });
     }
-  }, [ready, coordKey, coords]);
+  }, [ready, styleVersion, coordKey, coords]);
 
   // Update alternative route geometries
   const altKey = useMemo(
@@ -531,7 +541,17 @@ export function LiveMap({
         }));
       alt.setData({ type: "FeatureCollection", features });
     }
-  }, [ready, altKey, alternatives]);
+  }, [ready, styleVersion, altKey, alternatives]);
+
+  const comparisonKey = useMemo(() => JSON.stringify(comparisonGeometry ?? []), [comparisonGeometry]);
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready || loadedMap.current !== m) return;
+    const source = m.getSource("weather-comparison") as maplibregl.GeoJSONSource | undefined;
+    if (source) source.setData({ type: "FeatureCollection", features: comparisonGeometry && comparisonGeometry.length > 1 ? [{
+      type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: comparisonGeometry },
+    }] : [] });
+  }, [ready, styleVersion, comparisonKey, comparisonGeometry]);
 
   // Update abandoned leg geometry for simulation reroute
   const ghostKey = useMemo(() => JSON.stringify(sim?.ghostCoords ?? []), [sim?.ghostCoords]);
@@ -549,7 +569,7 @@ export function LiveMap({
         }] : [],
       });
     }
-  }, [ready, ghostKey, sim?.ghostCoords]);
+  }, [ready, styleVersion, ghostKey, sim?.ghostCoords]);
 
   // Update traffic sections geometry
   const trafficKey = useMemo(() => JSON.stringify(trafficSections ?? []), [trafficSections]);
@@ -569,7 +589,7 @@ export function LiveMap({
           })),
       });
     }
-  }, [ready, trafficKey, trafficSections]);
+  }, [ready, styleVersion, trafficKey, trafficSections]);
 
   // Weather forecasts along the route or general map conditions
   const forecasts = offset === -1 && routeWeather.length ? routeWeather : data?.weather ?? [];
@@ -693,7 +713,7 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
     if (m.getLayer("traffic-sections-line")) {
       m.setLayoutProperty("traffic-sections-line", "visibility", traffic && offset <= 0 ? "visible" : "none");
     }
-  }, [ready, data, traffic, incidents, offset]);
+  }, [ready, styleVersion, data, traffic, incidents, offset]);
 
   // Simulated vehicle marker
   useEffect(() => {
@@ -795,12 +815,17 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
             <select
               aria-label="Basemap style"
               value={basemap}
-              onChange={(e) => setBasemap(e.target.value as BasemapId)}
+              onChange={(e) => {
+                const next = e.target.value as BasemapId;
+                failedBasemaps.current.delete(next);
+                setError("");
+                setBasemap(next);
+              }}
               style={{ fontSize: "11px", padding: "3px 6px", borderRadius: 6, border: "1px solid var(--line)", background: "#fff", color: "var(--text)", fontWeight: 600 }}
             >
               <option value="osm">OpenStreetMap</option>
-              <option value="voyager">CARTO Voyager (Detailed)</option>
-              <option value="positron">CARTO Positron (Light)</option>
+              <option value="voyager">OpenFreeMap Liberty (Detailed)</option>
+              <option value="positron">OpenFreeMap Positron (Light)</option>
             </select>
           </div>
           <button
@@ -849,15 +874,19 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
           <small>{demo ? "Demo replay · live overlays disabled" : offset > 0 ? "Future weather only · current traffic layer hidden" : "Traffic: current conditions · weather: forecast"}</small>
         </span>
       </div>
-      {fallback ? (
-        <Fallback nodes={nodes} path={path} geometry={geometry} sim={sim} />
-      ) : (
-        <div ref={ref} className="maplibre" />
-      )}
+      <MapWeatherSimulation mapRef={map} mapContainerRef={ref} ready={ready} styleVersion={styleVersion}
+        fallback={fallback} demo={demo} routeCoords={planned} weatherZones={weatherZones}
+        plannedStart={plannedStart} plannedEnd={plannedEnd} avoidanceStatus={avoidanceStatus}
+        onAddWeatherZone={onAddWeatherZone} onUpdateWeatherZone={onUpdateWeatherZone} onDeleteWeatherZone={onDeleteWeatherZone}
+        onCancelWeatherZones={onCancelWeatherZones}>
+        {fallback ? <Fallback nodes={nodes} path={path} geometry={geometry} sim={sim} /> : <div ref={ref} className="maplibre" />}
+      </MapWeatherSimulation>
       <div className="map-legend">
         <span><i style={{ background: "#17765e" }} /> Selected route</span>
         <span><i style={{ background: "#82909c" }} /> Alternatives · click to compare</span>
+        {comparisonGeometry && <span><i className="legend-dash" style={{ background: "#d86135" }} /> Weather-affected road</span>}
         <span><i style={{ background: "#de7043" }} /> Traffic impact</span>
+        {weatherZones.length > 0 && <span><i style={{ background: "#d15e7d" }} /> Simulated weather zone</span>}
         {sim?.ghostCoords && <span><i className="legend-dash" style={{ background: "#c0392b" }} /> Abandoned leg</span>}
       </div>
       {data && !data.traffic_configured && (

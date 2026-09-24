@@ -18,6 +18,7 @@ class Operations:
         self.path = Path(directory or os.environ.get("STORE_DIR", "store")) / "operations.json"
         self.data = json.loads(self.path.read_text()) if self.path.exists() else {"weather": [], "events": [], "decisions": [], "revision": 0}
         self.data.setdefault("schedules", [])
+        self.data.setdefault("weather_zones", [])
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")

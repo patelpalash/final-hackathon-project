@@ -7,15 +7,16 @@ from .weather_rules import at_hub
 from .operations import parse
 from .live import DEFAULT_TRUCK
 from .schedules import next_departure
+from .weather_routes import active_zones, crossed_zones, closest_clear_detour, IMPACT_MINUTES
 
 def _haversine_km(a,b):
     dlat=math.radians(b[0]-a[0]); dlon=math.radians(b[1]-a[1])
     x=math.sin(dlat/2)**2+math.cos(math.radians(a[0]))*math.cos(math.radians(b[0]))*math.sin(dlon/2)**2
     return 12742*math.asin(min(1,math.sqrt(x)))
 
-def compute_journey(network, holidays, transfer, hub_delays, providers, origin, dest, depart_utc, path=None, operations=None, truck=None):
+def compute_journey(network, holidays, transfer, hub_delays, providers, origin, dest, depart_utc, path=None, operations=None, truck=None, avoid_zones=False):
     path = path or [origin,dest]
-    rows=[]; cur=depart_utc; geometry=[]; all_geometry=True; leg_data=[]; alerts=[]; forecasts=[]; traffic_sections=[]; services=[]
+    rows=[]; cur=depart_utc; geometry=[]; all_geometry=True; leg_data=[]; alerts=[]; forecasts=[]; traffic_sections=[]; services=[]; zone_impacts=[]; detour_km=0
     comp={k:0 for k in ("transport","transfer","hub_delay","traffic","legal_wait","weekend_hold","weather","schedule_wait")}
     def add(kind,loc,start,end,detail,source):
         rows.append({"type":kind,"location":loc,"location_name":network["nodes"][loc]["name"],"start":start.isoformat(),"end":end.isoformat(),"minutes":round((end-start).total_seconds()/60),"detail":detail,"source":source})
@@ -44,6 +45,17 @@ def compute_journey(network, holidays, transfer, hub_delays, providers, origin, 
         routing_start=expected
         road=providers.tomtom.route((na["lat"],na["lon"]),(nb["lat"],nb["lon"]),routing_start,truck or DEFAULT_TRUCK) if hasattr(providers,"tomtom") else None
         road=road or providers.routing.leg((na["lat"],na["lon"]),(nb["lat"],nb["lon"]))
+        original_road=road
+        zones=active_zones(operations,routing_start,routing_start+timedelta(minutes=max(1,road.get("duration_minutes",60))))
+        hit=crossed_zones(road.get("geometry"),zones)
+        if avoid_zones and hit:
+            road=closest_clear_detour(providers,(na["lat"],na["lon"]),(nb["lat"],nb["lon"]),road,zones,routing_start,truck or DEFAULT_TRUCK)
+            if not road: raise ValueError("No verified road detour clears the simulated weather zones")
+            detour_km+=max(0,road["distance_km"]-original_road["distance_km"])
+        elif avoid_zones and not road.get("geometry"):
+            raise ValueError("Road geometry unavailable; a clear detour cannot be verified")
+        elif hit:
+            zone_impacts.extend({"id":z["id"],"kind":z["kind"],"radius_km":z["radius_km"],"delay_minutes":IMPACT_MINUTES[z["kind"]]} for z in hit)
         km=road.get("distance_km") or round(_haversine_km((na["lat"],na["lon"]),(nb["lat"],nb["lon"]))*1.25,1)
         if hasattr(providers, "tomtom") and not getattr(providers.tomtom, "key", "") and road.get("geometry") and not road.get("traffic_sections"):
             sim_sec, sim_del = providers.tomtom.simulate_sections(road["geometry"], km)
@@ -75,6 +87,12 @@ def compute_journey(network, holidays, transfer, hub_delays, providers, origin, 
                 worst=max(active,key=lambda r:r["delay_minutes"]); delay=worst["delay_minutes"]
                 end=cur+timedelta(minutes=delay); add("weather",a,cur,end,worst["message"],worst["source"]+" · estimated weather impact"); comp["weather"]+=delay; cur=end
                 alerts.extend(active)
+        if hit and not avoid_zones:
+            delay=max(IMPACT_MINUTES[z["kind"]] for z in hit)
+            end=cur+timedelta(minutes=delay)
+            kinds=", ".join(sorted({z["kind"] for z in hit}))
+            add("weather",a,cur,end,f"Simulated {kinds} zone crosses this road leg · +{delay}m assumed", "MANUAL MAP SIMULATION")
+            comp["weather"]+=delay;cur=end
         for _ in range(len(events)+1):
             closures=[e for e in events if e["kind"]=="closure" and e.get("node")==a and parse(e["start"])<=cur<parse(e["end"])]
             if not closures: break
@@ -89,7 +107,7 @@ def compute_journey(network, holidays, transfer, hub_delays, providers, origin, 
                 comp["schedule_wait"]+=round((departure-cur).total_seconds()/60)
             cur=departure
         # If weather preparation missed the service, use the new departure's traffic estimate.
-        if cur!=routing_start and hasattr(providers,"tomtom") and providers.tomtom.key:
+        if cur!=routing_start and not hit and not avoid_zones and hasattr(providers,"tomtom") and providers.tomtom.key:
             fresh=providers.tomtom.route((na["lat"],na["lon"]),(nb["lat"],nb["lon"]),cur,truck or DEFAULT_TRUCK)
             if fresh:
                 road=fresh; drive=fresh["duration_minutes"]-fresh.get("traffic_minutes",0)
@@ -133,6 +151,7 @@ def compute_journey(network, holidays, transfer, hub_delays, providers, origin, 
             add("hub_delay",b,cur,end,"Facility closed · safe waiting outside destination: "+"; ".join(e["reason"] for e in closures),"MANAGER CLOSURE")
             comp["hub_delay"]+=round((end-cur).total_seconds()/60); cur=end
     return {"origin":origin,"destination":dest,"path":path,"depart_at":depart_utc.isoformat(),"eta":cur.isoformat(),
+            "zone_impacts":list({z["id"]:z for z in zone_impacts}.values()),"avoidance_status":"CLEAR" if avoid_zones else "IMPACTED" if zone_impacts else "NO_ZONE", "detour_km":round(detour_km,1),
             "scheduled_services":services,"total_minutes":round((cur-depart_utc).total_seconds()/60),"components":comp,"steps":rows,
             "geometry":geometry if all_geometry else None,"road_legs":leg_data,"weather_alerts":list({r["id"]:r for r in alerts}.values()),"live_weather":forecasts,"traffic_sections":traffic_sections,"traffic_status":"LIVE_OR_PREDICTED" if any("TomTom" in l["source"] for l in leg_data) else ("SIMULATED" if traffic_sections or any(l.get("traffic_sections") for l in [road]) else ("NOT_CONFIGURED" if not getattr(getattr(providers,"tomtom",None),"key",None) else "UNAVAILABLE")),
             "data_sources":{"transport":" + ".join(sorted({l["source"] for l in leg_data})),"transfer":"disposition.csv derived proxy","weather":"Open-Meteo forecasts + manual samples; impact is a prototype rule","weekend":"Full Sunday business hold","traffic":providers.traffic.status()}}

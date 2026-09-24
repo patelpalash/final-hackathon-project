@@ -53,8 +53,8 @@ def plan(ctx, origin, destination, depart_utc, weight_kg, required_delivery, val
     selected=select_hubs(net["nodes"][origin],net["nodes"][destination],net["nodes"].values(),road,ctx["providers"].routing,{"blocked":blocked,"ldm":ldm})
     paths=[([origin,destination],None)]+[([origin,h["hub"],destination],h) for h in selected]
     options=[]
-    for path,hub in paths:
-        jr=compute_journey(net,ctx["holidays"],ctx["transfer"],ctx["hub_delays"],ctx["providers"],origin,destination,depart_utc,path,operations,truck)
+    def add_option(path,hub,avoid=False):
+        jr=compute_journey(net,ctx["holidays"],ctx["transfer"],ctx["hub_delays"],ctx["providers"],origin,destination,depart_utc,path,operations,truck,avoid_zones=avoid)
         # Use the SAME road distances for fuel, cost and map/ETA.
         cost_net={**net,"edges":dict(net["edges"])}
         for leg in jr["road_legs"]:
@@ -62,6 +62,9 @@ def plan(ctx, origin, destination, depart_utc, weight_kg, required_delivery, val
             edge=cost_net["edges"].get(key,{"cost_eur":round(leg["km"]*2.6),"capacity_ldm":13.6})
             cost_net["edges"][key]={**edge,"km":leg["km"]}
         c=journey_cost(cost_net,path,ldm)
+        known=all(a+"-"+b in net["edges"] for a,b in zip(path,path[1:]))
+        surcharge=round(jr["detour_km"]*2.6*min(1,max(.15,ldm/13.6))) if avoid and known else 0
+        c["transport_eur"]+=surcharge
         # Only attach lane histories for actual dataset edges, not unrelated endpoint histories.
         relations={net["edges"][a+"-"+b]["relation"] for a,b in zip(path,path[1:]) if a+"-"+b in net["edges"]}
         hist=[ctx["history"][r] for r in relations if r in ctx["history"]]
@@ -69,16 +72,25 @@ def plan(ctx, origin, destination, depart_utc, weight_kg, required_delivery, val
         if jr["weather_alerts"]:
             risk["reasons"].append("Weather alert adds a modelled delay")
             risk["score"]+=25
+        if jr["zone_impacts"]:
+            risk["reasons"].append("Road crosses a manually simulated weather zone; assumed delay included")
+            risk["score"]+=35
+        if avoid:
+            risk["reasons"].append("Provider road geometry verified outside every active simulated zone (+2 km margin)")
         if jr["components"]["hub_delay"] or jr["components"]["traffic"]:
             risk["reasons"].append("Active operational events included in ETA")
             risk["score"]+=20
         risk["level"]="HIGH" if risk["score"]>=55 else "MEDIUM" if risk["score"]>=25 else "LOW"
-        known=all(a+"-"+b in net["edges"] for a,b in zip(path,path[1:]))
-        options.append({**jr,"label":f"Via {hub['name']}" if hub else "Direct road estimate","kind":"dataset_lane" if known else "estimate",
+        options.append({**jr,"route_id":"-".join(path)+(":clear" if avoid else ":normal"),"label":"Weather-safe road detour" if avoid else f"Via {hub['name']}" if hub else "Direct road estimate","kind":"dataset_lane" if known else "estimate",
                         "intermediate_hub":hub,"recommendation_note":"User-entered timetable applied; capacity is unverified." if jr.get("scheduled_services") else "Next eligible movement estimate — departure availability unverified.",
                         "is_demo":ctx.get("is_demo",False), "vehicle_constraints":"Truck profile requested" if "TomTom" in jr["data_sources"]["transport"] else "Vehicle restrictions unverified by fallback routing",
-                        "cost":{"transport_eur":c["transport_eur"],"fuel_l":c["fuel_l"],"fuel_eur":c["fuel_eur"],"distance_km":round(c["km"],1),"cost_per_kg":cost_per_kg(c["transport_eur"],weight_kg)},
+                        "cost":{"transport_eur":c["transport_eur"],"fuel_l":c["fuel_l"],"fuel_eur":c["fuel_eur"],"distance_km":round(c["km"],1),"cost_per_kg":cost_per_kg(c["transport_eur"],weight_kg),"detour_surcharge_eur":surcharge},
                         "risk":risk,"ldm":ldm,"historical":_hist_summary(hist),"revision":operations.data["revision"]})
+    for path,hub in paths:
+        add_option(path,hub)
+        if len(path)==2 and options[-1]["zone_impacts"]:
+            try: add_option(path,hub,True)
+            except ValueError: options[-1]["avoidance_status"]="NO_CLEAR_DETOUR"
     from .optimization import decorate
     return decorate(options,ctx,origin,destination,ldm,optimization)
 
@@ -172,7 +184,9 @@ class Shipments:
         dep = datetime.fromisoformat(p["planned_departure"].replace("Z", "+00:00")).astimezone(timezone.utc)
         opts = plan(self.context_for(p), p["origin"], p["destination"], dep, p.get("weight_kg", 0),
                     p.get("required_delivery"), p.get("value_eur", 0), p.get("optimization","fastest"),p.get("truck"))
-        chosen = next((i for i,o in enumerate(opts) if o["path"] == p.get("selected_path")), 0)
+        chosen = next((i for i,o in enumerate(opts) if o.get("route_id") == p.get("selected_route_id")), -1) if p.get("selected_route_id") else -1
+        if chosen<0: chosen = next((i for i,o in enumerate(opts) if o["path"] == p.get("selected_path")), 0)
+        if p.get("selected_route_id") and opts[chosen].get("route_id") != p["selected_route_id"]: raise ValueError("Selected road detour is no longer available. Recalculate first.")
         if p.get("selected_path") and opts[chosen]["path"] != p["selected_path"]: raise ValueError("Selected route is no longer available. Recalculate first.")
         rec = opts[chosen]
         ship = {

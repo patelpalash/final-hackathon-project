@@ -125,10 +125,13 @@ class TomTom:
             return payload
         except Exception as e:self.error=type(e).__name__;self.retry_after[url]=time.time()+30;return None
     def route(self,a,b,depart,truck):
+        return self.route_via(a,b,[],depart,truck)
+    def route_via(self,a,b,via,depart,truck):
         if not self.key:return None
         if depart<now()-timedelta(minutes=5):return None
         params={"traffic":"true","travelMode":"truck","routeType":"fastest","computeTravelTimeFor":"all","sectionType":"traffic","departAt":depart.replace(second=0,microsecond=0).isoformat(),"vehicleHeight":truck["height_m"],"vehicleWidth":truck["width_m"],"vehicleLength":truck["length_m"],"vehicleWeight":truck["gross_weight_kg"],"vehicleMaxSpeed":80}
-        doc=self.get(f"https://api.tomtom.com/routing/1/calculateRoute/{a[0]},{a[1]}:{b[0]},{b[1]}/json",params)
+        stops=":".join(f"{lat},{lon}" for lat,lon in [a,*via,b])
+        doc=self.get(f"https://api.tomtom.com/routing/1/calculateRoute/{stops}/json",params)
         if not doc or not doc.get("routes"):return None
         route=doc["routes"][0];summary=route["summary"]
         points=[[p["longitude"],p["latitude"]] for leg in route["legs"] for p in leg["points"]]

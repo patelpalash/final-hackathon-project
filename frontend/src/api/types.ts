@@ -17,7 +17,8 @@ export interface Incident { id:string; geometry:{type:string;coordinates: number
 export interface MapConditions { weather:LiveWeather[]; incidents:{status:string;items:Incident[];fetched_at?:string}; traffic_configured:boolean; at:string; fetched_at:string; }
 export interface TruckProfile { height_m:number; width_m:number; length_m:number; gross_weight_kg:number; }
 export interface RouteOption {
-  quote_id:string; evaluated_at:string; valid_until:string; is_demo?:boolean; vehicle_constraints?:string;
+  quote_id:string; route_id?:string; evaluated_at:string; valid_until:string; is_demo?:boolean; vehicle_constraints?:string;
+  avoidance_status?:"CLEAR"|"IMPACTED"|"NO_ZONE"|"NO_CLEAR_DETOUR"; zone_impacts?:{id:string;kind:string;radius_km:number;delay_minutes:number}[]; detour_km?:number;
   badges?:string[]; optimization?:string; live_weather?:LiveWeather[]; traffic_status?:string;
   traffic_sections?:{geometry:number[][];delay_minutes:number;description:string}[];
   comparison?:{baseline:string;money_saved_eur:number;minutes_saved:number;fuel_saved_l:number};
@@ -86,7 +87,9 @@ export interface WeatherInput { node: string; start: string; end: string; temper
 export interface WeatherRecord extends WeatherInput { id: string; alert: boolean; level: string; delay_minutes: number; message: string; action: string; source: string; }
 export interface ScenarioEvent { id: string; kind: string; node?: string; origin?: string; destination?: string; start: string; end: string; minutes: number; reason: string; }
 export interface Decision { id: string; shipment_id: string; action: string; reason: string; updated_at: string; path: string[]; eta: string; }
-export interface Operations { revision: number; weather: WeatherRecord[]; events: ScenarioEvent[]; decisions: Decision[]; }
+export interface WeatherZoneInput { kind:"snow"|"rain"|"tornado"; lat:number; lon:number; radius_km:number; start:string; end:string; }
+export interface WeatherZone extends WeatherZoneInput {id:string; updated_at:string;}
+export interface Operations { revision: number; weather: WeatherRecord[]; weather_zones: WeatherZone[]; events: ScenarioEvent[]; decisions: Decision[]; }
 
 export interface Service { id:string; origin:string; destination:string; weekdays:number[]; departure_time:string; timezone:string; cutoff_minutes:number; source:string; }
 export interface PlanChange { material:boolean; reasons:string[]; eta_minutes:number; cost_eur:number; previous_eta?:string; proposed_eta?:string; previous_cost?:number; proposed_cost?:number; evaluated_at?:string; }
