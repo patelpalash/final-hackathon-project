@@ -7,7 +7,7 @@ from .weather_rules import at_hub
 from .operations import parse
 from .live import DEFAULT_TRUCK
 from .schedules import next_departure
-from .weather_routes import active_zones, crossed_zones, closest_clear_detour, IMPACT_MINUTES
+from .weather_routes import active_zones, crossed_zones, closest_clear_detour, IMPACT_MINUTES, CLEARANCE_KM
 
 def _haversine_km(a,b):
     dlat=math.radians(b[0]-a[0]); dlon=math.radians(b[1]-a[1])
@@ -16,7 +16,8 @@ def _haversine_km(a,b):
 
 def compute_journey(network, holidays, transfer, hub_delays, providers, origin, dest, depart_utc, path=None, operations=None, truck=None, avoid_zones=False):
     path = path or [origin,dest]
-    rows=[]; cur=depart_utc; geometry=[]; all_geometry=True; leg_data=[]; alerts=[]; forecasts=[]; traffic_sections=[]; services=[]; zone_impacts=[]; detour_km=0
+    applied_global_traffic=set()
+    rows=[]; cur=depart_utc; geometry=[]; all_geometry=True; leg_data=[]; alerts=[]; forecasts=[]; traffic_sections=[]; services=[]; zone_impacts=[]; weather_detours=[]; detour_km=0
     comp={k:0 for k in ("transport","transfer","hub_delay","traffic","legal_wait","weekend_hold","weather","schedule_wait")}
     def add(kind,loc,start,end,detail,source):
         rows.append({"type":kind,"location":loc,"location_name":network["nodes"][loc]["name"],"start":start.isoformat(),"end":end.isoformat(),"minutes":round((end-start).total_seconds()/60),"detail":detail,"source":source})
@@ -33,25 +34,41 @@ def compute_journey(network, holidays, transfer, hub_delays, providers, origin, 
         hd=hub_delays.get(a)
         if hd and hd.get("minutes",0)>0:
             end=cur+timedelta(minutes=hd["minutes"]); add("hub_delay",a,cur,end,hd.get("reason","Hub congestion"),"MANAGER INPUT"); comp["hub_delay"]+=hd["minutes"]; cur=end
-        if operations:
-            for ev in operations.data["events"]:
-                if ev.get("node")!=a or not operations.overlaps(ev,cur,cur+timedelta(minutes=1)): continue
-                end=max(cur,parse(ev["end"])) if ev["kind"]=="closure" else cur+timedelta(minutes=ev["minutes"])
-                add("hub_delay",a,cur,end,ev["reason"],"SIMULATED EVENT / MANAGER INPUT"); comp["hub_delay"]+=round((end-cur).total_seconds()/60); cur=end
         schedules=operations.data.get("schedules",[]) if operations else []
         events=operations.data["events"] if operations else []
+        # A timed hub delay applies to every visit overlapping its effective
+        # window, including trucks already handling or waiting for a service.
+        planned_departure,_=next_departure(cur,a,b,schedules,holidays,events)
+        visit_end=max(cur+timedelta(minutes=1),planned_departure)
+        if operations:
+            for ev in events:
+                if ev["kind"]!="hub_delay" or ev.get("node")!=a or not operations.overlaps(ev,arrival,visit_end): continue
+                end=cur+timedelta(minutes=ev["minutes"])
+                add("hub_delay",a,cur,end,ev["reason"],"MANAGER HUB EVENT")
+                comp["hub_delay"]+=ev["minutes"]; cur=end
         # Forecast at the expected service departure; readiness includes the cutoff buffer.
         expected,service=next_departure(cur,a,b,schedules,holidays,events)
         routing_start=expected
         road=providers.tomtom.route((na["lat"],na["lon"]),(nb["lat"],nb["lon"]),routing_start,truck or DEFAULT_TRUCK) if hasattr(providers,"tomtom") else None
-        road=road or providers.routing.leg((na["lat"],na["lon"]),(nb["lat"],nb["lon"]))
+        road=dict(road or providers.routing.leg((na["lat"],na["lon"]),(nb["lat"],nb["lon"])))
         original_road=road
-        zones=active_zones(operations,routing_start,routing_start+timedelta(minutes=max(1,road.get("duration_minutes",60))))
-        hit=crossed_zones(road.get("geometry"),zones)
+        estimated_minutes=max(1,road.get("duration_minutes",60),math.ceil(road.get("distance_km",0)/65*60))
+        estimated_arrival=drive_with_restrictions(routing_start,estimated_minutes,holidays)["arrival"]
+        zones=active_zones(operations,routing_start,estimated_arrival)
+        hit=crossed_zones(road.get("geometry"),zones,CLEARANCE_KM)
         if avoid_zones and hit:
-            road=closest_clear_detour(providers,(na["lat"],na["lon"]),(nb["lat"],nb["lon"]),road,zones,routing_start,truck or DEFAULT_TRUCK)
-            if not road: raise ValueError("No verified road detour clears the simulated weather zones")
+            # Longer detours can overlap a second storm's effective window.
+            # Add those constraints and search again, without forgetting old ones.
+            while True:
+                road=closest_clear_detour(providers,(na["lat"],na["lon"]),(nb["lat"],nb["lon"]),original_road,zones,routing_start,truck or DEFAULT_TRUCK)
+                if not road: raise ValueError("No verified road detour clears the simulated weather zones")
+                end=drive_with_restrictions(routing_start,max(road["duration_minutes"],math.ceil(road["distance_km"]/65*60)),holidays)["arrival"]
+                added=[z for z in active_zones(operations,routing_start,end) if z["id"] not in {v["id"] for v in zones}]
+                if not added:break
+                zones.extend(added)
             detour_km+=max(0,road["distance_km"]-original_road["distance_km"])
+            for detour in road.get("weather_detours",[road["weather_detour"]] if road.get("weather_detour") else []):
+                weather_detours.append({"from":a,"to":b,**detour})
         elif avoid_zones and not road.get("geometry"):
             raise ValueError("Road geometry unavailable; a clear detour cannot be verified")
         elif hit:
@@ -119,8 +136,13 @@ def compute_journey(network, holidays, transfer, hub_delays, providers, origin, 
         traffic=road.get("traffic_minutes",0)  # already separated from provider total; count once
         if operations:
             for ev in operations.data["events"]:
-                if ev["kind"]=="traffic" and ev.get("origin")==a and ev.get("destination")==b and operations.overlaps(ev,cur,cur+timedelta(minutes=drive)):
+                if ev["kind"]!="traffic" or not operations.overlaps(ev,cur,cur+timedelta(minutes=drive)): continue
+                is_global=not ev.get("origin") and not ev.get("destination")
+                matches_corridor=ev.get("origin")==a and ev.get("destination")==b
+                if is_global and ev.get("id") in applied_global_traffic: continue
+                if is_global or matches_corridor:
                     traffic+=ev["minutes"]
+                    if is_global: applied_global_traffic.add(ev.get("id"))
                     if road.get("geometry"):
                         g = road["geometry"]
                         g0 = max(0, int(len(g) * 0.15))
@@ -134,6 +156,11 @@ def compute_journey(network, holidays, transfer, hub_delays, providers, origin, 
                             })
         comp["traffic"]+=traffic
         leg=drive_with_restrictions(cur,drive+traffic,holidays)
+        final_hits=crossed_zones(road.get("geometry"),active_zones(operations,cur,leg["arrival"]),CLEARANCE_KM)
+        if final_hits:
+            if avoid_zones:
+                raise ValueError("A weather zone overlaps the updated passage time; no clear itinerary can be verified")
+            zone_impacts.extend({"id":z["id"],"kind":z["kind"],"radius_km":z["radius_km"],"delay_minutes":IMPACT_MINUTES[z["kind"]]} for z in final_hits)
         t=cur
         for pause in leg["pauses"]:
             if pause["start"]>t: add("drive",a,t,pause["start"],f"{na['name']} → {nb['name']} · {km} km"+(f" · +{traffic}m traffic" if traffic else ""),src)
@@ -150,8 +177,15 @@ def compute_journey(network, holidays, transfer, hub_delays, providers, origin, 
             end=max(parse(e["end"]) for e in closures)
             add("hub_delay",b,cur,end,"Facility closed · safe waiting outside destination: "+"; ".join(e["reason"] for e in closures),"MANAGER CLOSURE")
             comp["hub_delay"]+=round((end-cur).total_seconds()/60); cur=end
+        # Completion at the final facility includes an active receiving delay.
+        if operations and b==dest:
+            for ev in events:
+                if ev["kind"]!="hub_delay" or ev.get("node")!=b or not operations.overlaps(ev,cur,cur+timedelta(minutes=1)): continue
+                end=cur+timedelta(minutes=ev["minutes"])
+                add("hub_delay",b,cur,end,ev["reason"],"MANAGER HUB EVENT")
+                comp["hub_delay"]+=ev["minutes"]; cur=end
     return {"origin":origin,"destination":dest,"path":path,"depart_at":depart_utc.isoformat(),"eta":cur.isoformat(),
-            "zone_impacts":list({z["id"]:z for z in zone_impacts}.values()),"avoidance_status":"CLEAR" if avoid_zones else "IMPACTED" if zone_impacts else "NO_ZONE", "detour_km":round(detour_km,1),
+            "zone_impacts":list({z["id"]:z for z in zone_impacts}.values()),"weather_detours":weather_detours,"avoidance_status":"CLEAR" if avoid_zones else "IMPACTED" if zone_impacts else "NO_ZONE", "detour_km":round(detour_km,1),
             "scheduled_services":services,"total_minutes":round((cur-depart_utc).total_seconds()/60),"components":comp,"steps":rows,
             "geometry":geometry if all_geometry else None,"road_legs":leg_data,"weather_alerts":list({r["id"]:r for r in alerts}.values()),"live_weather":forecasts,"traffic_sections":traffic_sections,"traffic_status":"LIVE_OR_PREDICTED" if any("TomTom" in l["source"] for l in leg_data) else ("SIMULATED" if traffic_sections or any(l.get("traffic_sections") for l in [road]) else ("NOT_CONFIGURED" if not getattr(getattr(providers,"tomtom",None),"key",None) else "UNAVAILABLE")),
             "data_sources":{"transport":" + ".join(sorted({l["source"] for l in leg_data})),"transfer":"disposition.csv derived proxy","weather":"Open-Meteo forecasts + manual samples; impact is a prototype rule","weekend":"Full Sunday business hold","traffic":providers.traffic.status()}}

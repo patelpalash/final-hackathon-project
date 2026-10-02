@@ -11,16 +11,67 @@ import os
 import re
 import uuid
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from .review import change_summary
 from datetime import datetime, timedelta, timezone
 
 from .cost import journey_cost, cost_per_kg
 from .eta import compute_journey
 from .risk import assess
+from .operations import parse
 
 STORE_DIR = os.environ.get("STORE_DIR", os.path.join(os.getcwd(), "store"))
 STORE = os.path.join(STORE_DIR, "shipments.json")
 KG_PER_LDM = 1750.0
+
+
+def shipment_visits_hub_during(ship, event, pending_only=False):
+    """Check the approved itinerary, without changing its saved ETA or route."""
+    node=event.get("node")
+    plan=ship.get("accepted_plan")
+    if (not node or not plan or node not in plan.get("path",[]) or
+            ship.get("status")=="DELIVERED" or ship.get("demo_session")):
+        return False
+    if pending_only and event.get("updated_at") and plan.get("evaluated_at") and (
+            parse(event["updated_at"])<=parse(plan["evaluated_at"])):
+        return False
+    steps=plan.get("steps",[])
+    event_start,event_end=parse(event["start"]),parse(event["end"])
+    for handling in (s for s in steps if s["type"]=="handling" and s["location"]==node):
+        arrival=parse(handling["start"])
+        departure=next((parse(s["start"]) for s in steps if s["type"]=="drive" and
+                        s["location"]==node and parse(s["start"])>=arrival),parse(handling["end"]))
+        if event_start<max(departure,arrival+timedelta(minutes=1)) and event_end>arrival:
+            return True
+    if plan["path"][-1]==node:
+        drives=[s for s in steps if s["type"]=="drive"]
+        if drives:
+            arrival=parse(drives[-1]["end"])
+            completion=max(parse(plan["eta"]),arrival+timedelta(minutes=1))
+            return event_start<completion and event_end>arrival
+    return False
+
+
+def shipment_traffic_exposure_minutes(ship, event, pending_only=False):
+    """Return a trip-level traffic delay when a saved drive overlaps the event."""
+    plan=ship.get("accepted_plan")
+    if not plan or ship.get("status") not in {"SCHEDULED","IN TRANSIT","DELAYED"} or ship.get("demo_session"):
+        return 0
+    if pending_only and event.get("updated_at") and plan.get("evaluated_at") and (
+            parse(event["updated_at"])<=parse(plan["evaluated_at"])):
+        return 0
+    path=plan.get("path",[])
+    origin,destination=event.get("origin"),event.get("destination")
+    global_event=not origin and not destination
+    if not global_event and not any(a==origin and b==destination for a,b in zip(path,path[1:])):
+        return 0
+    start,end=parse(event["start"]),parse(event["end"])
+    for step in plan.get("steps",[]):
+        if step.get("type")!="drive":continue
+        if not global_event and step.get("location")!=origin:continue
+        if parse(step["start"])<end and parse(step["end"])>start:
+            return max(0,int(event.get("minutes",0)))
+    return 0
 
 
 def _load():
@@ -52,8 +103,7 @@ def plan(ctx, origin, destination, depart_utc, weight_kg, required_delivery, val
     blocked={e["node"] for e in operations.data["events"] if e["kind"]=="closure" and e.get("node") and operations.overlaps(e,depart_utc,depart_utc+timedelta(days=7))}
     selected=select_hubs(net["nodes"][origin],net["nodes"][destination],net["nodes"].values(),road,ctx["providers"].routing,{"blocked":blocked,"ldm":ldm})
     paths=[([origin,destination],None)]+[([origin,h["hub"],destination],h) for h in selected]
-    options=[]
-    def add_option(path,hub,avoid=False):
+    def build_option(path,hub,avoid=False):
         jr=compute_journey(net,ctx["holidays"],ctx["transfer"],ctx["hub_delays"],ctx["providers"],origin,destination,depart_utc,path,operations,truck,avoid_zones=avoid)
         # Use the SAME road distances for fuel, cost and map/ETA.
         cost_net={**net,"edges":dict(net["edges"])}
@@ -81,16 +131,22 @@ def plan(ctx, origin, destination, depart_utc, weight_kg, required_delivery, val
             risk["reasons"].append("Active operational events included in ETA")
             risk["score"]+=20
         risk["level"]="HIGH" if risk["score"]>=55 else "MEDIUM" if risk["score"]>=25 else "LOW"
-        options.append({**jr,"route_id":"-".join(path)+(":clear" if avoid else ":normal"),"label":"Weather-safe road detour" if avoid else f"Via {hub['name']}" if hub else "Direct road estimate","kind":"dataset_lane" if known else "estimate",
+        return {**jr,"route_id":"-".join(path)+(":clear" if avoid else ":normal"),"label":(f"Via {hub['name']} · clear detour" if hub else "Weather-safe road detour") if avoid else f"Via {hub['name']}" if hub else "Direct road estimate","kind":"dataset_lane" if known else "estimate",
                         "intermediate_hub":hub,"recommendation_note":"User-entered timetable applied; capacity is unverified." if jr.get("scheduled_services") else "Next eligible movement estimate — departure availability unverified.",
                         "is_demo":ctx.get("is_demo",False), "vehicle_constraints":"Truck profile requested" if "TomTom" in jr["data_sources"]["transport"] else "Vehicle restrictions unverified by fallback routing",
                         "cost":{"transport_eur":c["transport_eur"],"fuel_l":c["fuel_l"],"fuel_eur":c["fuel_eur"],"distance_km":round(c["km"],1),"cost_per_kg":cost_per_kg(c["transport_eur"],weight_kg),"detour_surcharge_eur":surcharge},
-                        "risk":risk,"ldm":ldm,"historical":_hist_summary(hist),"revision":operations.data["revision"]})
-    for path,hub in paths:
-        add_option(path,hub)
-        if len(path)==2 and options[-1]["zone_impacts"]:
-            try: add_option(path,hub,True)
-            except ValueError: options[-1]["avoidance_status"]="NO_CLEAR_DETOUR"
+                        "risk":risk,"ldm":ldm,"historical":_hist_summary(hist),"revision":operations.data["revision"]}
+    def evaluate_path(item):
+        path,hub=item
+        options=[build_option(path,hub)]
+        if options[0]["zone_impacts"]:
+            try: options.append(build_option(path,hub,True))
+            except ValueError: options[0]["avoidance_status"]="NO_CLEAR_DETOUR"
+        return options
+    # Each itinerary is independent; preserve deterministic ordering while
+    # overlapping provider waits. Every candidate still checks all weather zones.
+    with ThreadPoolExecutor(max_workers=min(4,len(paths))) as pool:
+        options=[option for group in pool.map(evaluate_path,paths) for option in group]
     from .optimization import decorate
     return decorate(options,ctx,origin,destination,ldm,optimization)
 
@@ -218,52 +274,84 @@ class Shipments:
         if s["status"] in {"IN TRANSIT", "DELIVERED"}: raise ValueError("Scheduling changes are supported before dispatch only")
         if not 0 <= option_index < len(s["options"]): raise ValueError("Invalid route option")
         opt = s["options"][option_index]
+        if opt.get("avoidance_status") in {"IMPACTED", "NO_CLEAR_DETOUR"}:
+            raise ValueError("Route crosses an active simulated weather zone. Hold the shipment or choose a clear route.")
         if quote_id is not None and quote_id!=opt.get("quote_id"): raise ValueError("This quote was replaced. Recalculate and review again.")
         ctx=self.context_for(s)
+        if s.get("hold") and parse(s["planned_departure"])<datetime.now(timezone.utc):
+            raise ValueError("The held departure is in the past. Recalculate before releasing the hold.")
         if opt.get("revision", -1) != ctx["operations"].data["revision"]: raise ValueError("Conditions changed. Recalculate the shipment before scheduling.")
-        if opt.get("valid_until") and datetime.fromisoformat(opt["valid_until"]) < datetime.now(timezone.utc): raise ValueError("Live quote expired. Recalculate before scheduling.")
         fresh=plan(ctx,s["origin"],s["destination"],datetime.fromisoformat(s["planned_departure"].replace("Z","+00:00")),s["weight_kg"],s.get("required_delivery"),s.get("value_eur",0),s.get("optimization","fastest"),s.get("truck"))
-        candidate=next((o for o in fresh if o["path"]==opt["path"]),None)
+        candidate=next((o for o in fresh if o.get("route_id")==opt.get("route_id")),None)
+        if candidate and candidate.get("avoidance_status") in {"IMPACTED", "NO_CLEAR_DETOUR"}:
+            raise ValueError("Weather conditions changed. Hold the shipment and recalculate a clear route.")
         if candidate is None or change_summary(opt,candidate)["material"]:
             s["options"]=fresh
             s["plan_change"]=change_summary(s.get("accepted_plan"),fresh[0])
             _save(self.data)
             raise ValueError("Live conditions changed during approval. Recalculate and review the updated options; saved plan was retained.")
-        if not opt["risk"]["deadline_ok"] and not force:
+        # The freshly checked quote is the plan we actually approve and persist.
+        approved = candidate
+        approved_index = fresh.index(candidate)
+        if not approved["risk"]["deadline_ok"] and not force:
             # feasibility warning BEFORE committing
-            return s, f"WARNING: selected route misses delivery window (ETA {opt['eta']}). Schedule anyway or pick another route."
+            return s, f"WARNING: selected route misses delivery window (ETA {approved['eta']}). Schedule anyway or pick another route."
         # What would have happened had we kept the previously approved path? The
         # counterfactual is that same path re-evaluated under the CURRENT
         # conditions, which is exactly what this option set already contains.
         previous = (s.get("accepted_plan") or {}).get("path")
-        if previous and previous != opt["path"]:
-            stayed = next((o for o in s["options"] if o["path"] == previous), None)
+        if previous and previous != approved["path"]:
+            stayed = next((o for o in fresh if o["path"] == previous), None)
             if stayed:
-                rescued = bool(opt["risk"]["deadline_ok"]) and not stayed["risk"]["deadline_ok"]
+                rescued = bool(approved["risk"]["deadline_ok"]) and not stayed["risk"]["deadline_ok"]
                 s["disruption_savings"] = {
-                    "minutes_avoided": round(stayed["total_minutes"] - opt["total_minutes"]),
-                    "cost_delta_eur": round(opt["cost"]["transport_eur"] - stayed["cost"]["transport_eur"], 2),
-                    "fuel_delta_l": round(opt["cost"]["fuel_l"] - stayed["cost"]["fuel_l"], 1),
+                    "minutes_avoided": round(stayed["total_minutes"] - approved["total_minutes"]),
+                    "cost_delta_eur": round(approved["cost"]["transport_eur"] - stayed["cost"]["transport_eur"], 2),
+                    "fuel_delta_l": round(approved["cost"]["fuel_l"] - stayed["cost"]["fuel_l"], 1),
                     "deadline_rescued": rescued,
                     "exposure_avoided_eur": round(stayed["risk"]["exposure_eur"], 2) if rescued else 0,
-                    "previous_path": previous, "new_path": opt["path"],
-                    "counterfactual_eta": stayed["eta"], "approved_eta": opt["eta"],
+                    "previous_path": previous, "new_path": approved["path"],
+                    "counterfactual_eta": stayed["eta"], "approved_eta": approved["eta"],
                     "recorded_at": datetime.now(timezone.utc).isoformat(),
                     "basis": "Previously approved path re-evaluated under the conditions in force at approval",
                 }
-        s.update({"status": "SCHEDULED", "scheduled_departure": next((step["start"] for step in opt["steps"] if step["type"]=="drive"),s["planned_departure"]),
-                  "route": opt["path"], "current_eta": opt["eta"],
-                  "est_cost_eur": opt["cost"]["transport_eur"], "est_fuel_l": opt["cost"]["fuel_l"],
-                  "risk_level": opt["risk"]["level"], "selected_option": option_index, "accepted_plan": deepcopy(opt), "approved_at":datetime.now(timezone.utc).isoformat(), "plan_change":None,
-                  "next_hub": opt["path"][1], "distance_km": opt["cost"]["distance_km"], "cost_per_kg": opt["cost"]["cost_per_kg"],
-                  "delay_minutes": _delay(opt["eta"],s.get("required_delivery")), "alert": None if opt["risk"]["deadline_ok"] else "Delivery deadline at risk"})
+        s["options"] = fresh
+        s.pop("hold",None)
+        s.update({"status": "SCHEDULED", "scheduled_departure": next((step["start"] for step in approved["steps"] if step["type"]=="drive"),s["planned_departure"]),
+                  "route": approved["path"], "current_eta": approved["eta"],
+                  "est_cost_eur": approved["cost"]["transport_eur"], "est_fuel_l": approved["cost"]["fuel_l"],
+                  "risk_level": approved["risk"]["level"], "selected_option": approved_index, "accepted_plan": deepcopy(approved), "approved_at":datetime.now(timezone.utc).isoformat(), "plan_change":None,
+                  "next_hub": approved["path"][1], "distance_km": approved["cost"]["distance_km"], "cost_per_kg": approved["cost"]["cost_per_kg"],
+                  "delay_minutes": _delay(approved["eta"],s.get("required_delivery")), "alert": None if approved["risk"]["deadline_ok"] else "Delivery deadline at risk"})
         _save(self.data)
         return s, None
+
+    def hold(self, sid, option_index, reason):
+        s=self.data[sid]
+        if s["status"] in {"IN TRANSIT","DELAYED","DELIVERED"}:
+            raise ValueError("Manager holds are supported before dispatch only")
+        if not reason.strip() or len(reason.strip())<3: raise ValueError("Enter a reason for the hold")
+        if not 0<=option_index<len(s["options"]): raise ValueError("Invalid route option")
+        opt=s["options"][option_index]
+        # Store the exact reviewed route separately. A hold does not approve an
+        # unsafe plan or overwrite an earlier approved route/ETA.
+        s["hold"]={"reason":reason.strip(),"at":datetime.now(timezone.utc).isoformat(),
+                   "previous_status":s.get("hold",{}).get("previous_status",s["status"]),
+                   "route_id":opt.get("route_id"),"path":list(opt["path"]),"plan":deepcopy(opt)}
+        s["status"]="ON HOLD"
+        s["alert"]="Manager hold — "+reason.strip()
+        s["scheduled_departure"]=None
+        _save(self.data)
+        return s
 
     def replan(self, sid):
         s=self.data[sid]
         if s["status"] in ("IN TRANSIT","DELIVERED"):
             raise ValueError("Prototype replanning is supported before dispatch only")
+        if s.get("hold") and parse(s["planned_departure"])<datetime.now(timezone.utc):
+            # A resumed shipment cannot use its missed departure. The old
+            # accepted plan remains intact for the manager's comparison.
+            s["planned_departure"]=(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat()
         s["options"]=plan(self.context_for(s),s["origin"],s["destination"],datetime.fromisoformat(s["planned_departure"].replace("Z","+00:00")),s["weight_kg"],s.get("required_delivery"),s.get("value_eur",0),s.get("optimization","fastest"),s.get("truck"))
         s["plan_change"]=change_summary(s.get("accepted_plan"),s["options"][0])
         _save(self.data)
@@ -273,6 +361,7 @@ class Shipments:
         if status not in {"PLANNED","SCHEDULED","IN TRANSIT","DELAYED","DELIVERED"}: raise ValueError("Invalid shipment status")
         s = self.data.get(sid)
         if s:
+            if s.get("hold"): raise ValueError("Shipment is on hold. Recalculate and approve a clear route in the control room to release it.")
             if status in {"SCHEDULED","IN TRANSIT"} and not s.get("approved_at"): raise ValueError("A manager must approve a plan first")
             s["status"] = status; _save(self.data)
         return s
@@ -293,10 +382,19 @@ class Shipments:
         return s
 
     def list(self):
+        changed = False
+        for ship in self.data.values():
+            if _advance_time_status(ship):
+                changed = True
+        if changed:
+            _save(self.data)
         return sorted(self.data.values(), key=lambda x: x["created_at"], reverse=True)
 
     def get(self, sid):
-        return self.data.get(sid)
+        ship = self.data.get(sid)
+        if ship and _advance_time_status(ship):
+            _save(self.data)
+        return ship
 
 
 def _delay(eta, required):
@@ -304,6 +402,38 @@ def _delay(eta, required):
         return 0
     e = datetime.fromisoformat(eta); r = datetime.fromisoformat(required.replace("Z", "+00:00"))
     return max(0, int((e - r).total_seconds() // 60))
+
+
+def _advance_time_status(ship, at=None):
+    """Advance approved shipments using the plan clock; this is not GPS proof."""
+    if ship.get("status") not in {"SCHEDULED", "IN TRANSIT", "DELAYED"}:
+        return False
+    at = at or datetime.now(timezone.utc)
+    try:
+        eta = parse(ship["current_eta"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if eta <= at:
+        next_status = "DELIVERED"
+    else:
+        try:
+            deadline = parse(ship["required_delivery"]) if ship.get("required_delivery") else None
+        except (TypeError, ValueError):
+            deadline = None
+        if deadline and deadline <= at:
+            next_status = "DELAYED"
+        elif ship.get("status") == "SCHEDULED":
+            try:
+                departure = parse(ship.get("scheduled_departure") or ship["planned_departure"])
+            except (KeyError, TypeError, ValueError):
+                departure = None
+            next_status = "IN TRANSIT" if departure and departure <= at else "SCHEDULED"
+        else:
+            next_status = ship["status"]
+    if next_status == ship["status"]:
+        return False
+    ship["status"] = next_status
+    return True
 
 
 def _next_friday(base, hour):

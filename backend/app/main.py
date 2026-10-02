@@ -27,7 +27,7 @@ from .eta import compute_journey, _haversine_km
 from .providers import Providers
 from .restrictions import drive_with_restrictions
 from .risk import assess
-from .shipments import Shipments, plan as plan_options, savings_vs_baseline
+from .shipments import Shipments, plan as plan_options, savings_vs_baseline, shipment_visits_hub_during, shipment_traffic_exposure_minutes
 from . import savings as savings_engine
 from .simulate import reroute as simulate_reroute
 from .map_tiles import router as map_tiles_router
@@ -74,7 +74,10 @@ async def lifespan(app: FastAPI):
     S["ships"].seed_if_empty()
     _audit("startup", f"{len(S['network']['nodes'])} hubs, {len(S['holidays'])} holidays, "
                       f"{len(S['history'])} lane histories, {len(S['ships'].list())} shipments")
-    yield
+    try:
+        yield
+    finally:
+        if hasattr(S["providers"],"close"):S["providers"].close()
 
 
 app = FastAPI(title="DACHSER Live Transit Planner", version="3.0.0", lifespan=lifespan)
@@ -94,10 +97,12 @@ async def invalid_request(request, exc):
     return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 class TruckReq(BaseModel):
-    height_m: float = Field(default=4, gt=0, le=6)
-    width_m: float = Field(default=2.55, gt=0, le=4)
-    length_m: float = Field(default=16.5, gt=0, le=30)
-    gross_weight_kg: float = Field(default=40000, gt=0, le=100000)
+    # Broad prototype sanity limits; these are routing-input limits, not a claim
+    # that every vehicle at these dimensions is legal in every country.
+    height_m: float = Field(default=4, ge=1.5, le=4.5)
+    width_m: float = Field(default=2.55, ge=1.5, le=2.6)
+    length_m: float = Field(default=16.5, ge=3, le=20)
+    gross_weight_kg: float = Field(default=40000, ge=1000, le=50000)
 
 class RouteReq(BaseModel):
     optimization: Literal["fastest","cost","balanced"] = "fastest"
@@ -105,9 +110,17 @@ class RouteReq(BaseModel):
     origin: str
     destination: str
     depart_at: Optional[AwareDatetime] = None
-    weight_kg: float = Field(default=8000, gt=0, le=23800)
+    weight_kg: float = Field(default=8000, ge=1, le=23800)
     required_delivery: Optional[AwareDatetime] = None
-    value_eur: float = Field(default=0, ge=0)
+    value_eur: float = Field(default=0, ge=0, le=100_000_000)
+
+    @model_validator(mode="after")
+    def validate_planning_inputs(self):
+        if self.weight_kg > self.truck.gross_weight_kg:
+            raise ValueError("Gross vehicle weight must be at least the shipment weight.")
+        if self.depart_at and self.required_delivery and self.required_delivery <= self.depart_at:
+            raise ValueError("Delivery deadline must be later than the departure time.")
+        return self
 
 
 class DelayReq(BaseModel):
@@ -124,12 +137,20 @@ class ShipmentReq(BaseModel):
     selected_route_id: Optional[str] = None
     origin: str
     destination: str
-    weight_kg: float = Field(default=8000, gt=0, le=23800)
-    value_eur: float = Field(default=0, ge=0)
+    weight_kg: float = Field(default=8000, ge=1, le=23800)
+    value_eur: float = Field(default=0, ge=0, le=100_000_000)
     planned_departure: AwareDatetime
     required_delivery: Optional[AwareDatetime] = None
     container: Optional[str] = None
     customer_segment: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_planning_inputs(self):
+        if self.weight_kg > self.truck.gross_weight_kg:
+            raise ValueError("Gross vehicle weight must be at least the shipment weight.")
+        if self.required_delivery and self.required_delivery <= self.planned_departure:
+            raise ValueError("Delivery deadline must be later than the departure time.")
+        return self
 
 
 def _parse(dt):
@@ -216,10 +237,11 @@ def route(req: RouteReq):
     options = plan_options(_ctx(), req.origin, req.destination, depart,
                            req.weight_kg, req.required_delivery.isoformat() if req.required_delivery else None, req.value_eur, req.optimization, req.truck.model_dump())
 
-    savings = savings_vs_baseline(options[0], options[1]) if len(options) > 1 else None
+    savings = savings_vs_baseline(options[0], options[1]) if len(options) > 1 and options[0].get("avoidance_status") in {"NO_ZONE", "CLEAR"} else None
     wx = []  # Manual/sample records are evaluated by the same weather alert engine.
-    _audit("route_calculated", f"{req.origin} → {req.destination}: recommended ETA {options[0]['eta']}")
-    return {"options": options, "recommended": 0, "savings": savings,
+    safe_available=options[0].get("avoidance_status") in {"NO_ZONE", "CLEAR"}
+    _audit("route_calculated", f"{req.origin} → {req.destination}: " + (f"recommended ETA {options[0]['eta']}" if safe_available else "no route clear of simulated weather zones"))
+    return {"options": options, "recommended": 0 if safe_available else None, "savings": savings,
             "weather": wx, "revision": S["operations"].data["revision"], "providers": S["providers"].all(), "evaluated_at": _now_iso()}
 
 
@@ -237,7 +259,22 @@ def list_shipments(status: Optional[str] = None, origin: Optional[str] = None,
         if high_value and (s.get("value_eur", 0) < 100000): return False
         if delayed and not s.get("delay_minutes"): return False
         return True
-    return {"shipments": [{k: v for k, v in s.items() if k not in {"options", "accepted_plan"}} for s in items if keep(s)]}
+    events=S["operations"].data["events"]
+    def summary(s):
+        matching=[e for e in events if e["kind"]=="hub_delay" and shipment_visits_hub_during(s,e,pending_only=True)]
+        traffic=[e for e in events if e["kind"]=="traffic" and shipment_traffic_exposure_minutes(s,e,pending_only=True)]
+        closures=[e for e in events if e["kind"]=="closure" and shipment_visits_hub_during(s,e,pending_only=True)]
+        hub_minutes=sum(e["minutes"] for e in matching)
+        traffic_minutes=sum(shipment_traffic_exposure_minutes(s,e,pending_only=True) for e in traffic)
+        projected_eta=(parse(s["current_eta"])+timedelta(minutes=hub_minutes+traffic_minutes)).isoformat() if hub_minutes+traffic_minutes else None
+        return {**{k:v for k,v in s.items() if k not in {"options","accepted_plan"}},
+                "pending_hub_delay_minutes":hub_minutes,
+                "pending_hub_events":[e["id"] for e in matching],
+                "pending_traffic_minutes":traffic_minutes,
+                "pending_traffic_events":[e["id"] for e in traffic],
+                "pending_closure_events":[e["id"] for e in closures],
+                "projected_eta":projected_eta}
+    return {"shipments":[summary(s) for s in items if keep(s)]}
 
 
 @app.get("/api/shipments/{sid}")
@@ -395,7 +432,7 @@ class EventReq(WindowReq):
 
 class DecisionReq(BaseModel):
     shipment_id: str
-    action: Literal["accept","keep","defer"]
+    action: Literal["accept","keep","defer","hold"]
     option: int = Field(default=0, ge=0)
     revision: int
     quote_id: str = Field(min_length=1)
@@ -409,6 +446,15 @@ def _node(nid):
 def operations():
     result = S["operations"].snapshot()
     result["weather"] = [evaluate(r) for r in result["weather"]]
+    for event in result["events"]:
+        if event["kind"] in {"hub_delay","closure"}:
+            affected=[s["id"] for s in S["ships"].list() if shipment_visits_hub_during(s,event)]
+            event["affected_count"]=len(affected)
+            event["affected_shipments"]=affected
+        elif event["kind"]=="traffic":
+            affected=[s["id"] for s in S["ships"].list() if shipment_traffic_exposure_minutes(s,event,pending_only=True)]
+            event["affected_count"]=len(affected)
+            event["affected_shipments"]=affected
     result["thresholds"] = THRESHOLDS
     return result
 
@@ -474,8 +520,10 @@ def delete_weather(rid: str):
 @serialized
 def add_event(req: EventReq):
     if req.kind=="traffic":
-        _node(req.origin); _node(req.destination)
-        if req.origin==req.destination: raise ValueError("Choose different endpoints")
+        if bool(req.origin) != bool(req.destination): raise ValueError("Provide both corridor endpoints or leave both empty for all routes")
+        if req.origin:
+            _node(req.origin); _node(req.destination)
+            if req.origin==req.destination: raise ValueError("Choose different endpoints")
     else: _node(req.node)
     row=S["operations"].put("events",req.model_dump(mode="json"))
     _audit("scenario_event",req.reason,"SIMULATED / MANAGER INPUT")
@@ -509,8 +557,12 @@ def decision(req: DecisionReq):
         if req.quote_id!=option.get("quote_id"): raise HTTPException(409,"Quote replaced. Recalculate and review again.")
         previous_route=list(s["route"])
         if req.action=="accept":
+            if option.get("avoidance_status") in {"IMPACTED", "NO_CLEAR_DETOUR"}:
+                raise HTTPException(409,"This route crosses an active simulated weather zone. Hold or defer the shipment, or choose a verified clear route.")
             _, warning=S["ships"].schedule(req.shipment_id,req.option,req.acknowledge_deadline,req.quote_id)
             if warning: raise HTTPException(409,warning)
+        elif req.action=="hold":
+            S["ships"].hold(req.shipment_id,req.option,req.reason)
         row=S["operations"].put("decisions",{**req.model_dump(),"path":s["route"],"eta":s["current_eta"],"reviewed_path":option["path"],"reviewed_eta":option["eta"],"data_kind":s.get("data_kind","user"),"previous_route":previous_route})
         _audit("manager_decision",f"{req.shipment_id}: {req.action} — {req.reason}","MANAGER INPUT")
         return row
@@ -550,6 +602,7 @@ class RerouteReq(BaseModel):
     depart_at: Optional[AwareDatetime] = None
     truck: TruckReq = Field(default_factory=TruckReq)
     transfer_minutes: int = Field(default=0, ge=0, le=1440)
+    avoid_weather: bool = False
 
 
 @app.post("/api/simulate/reroute")
@@ -564,7 +617,7 @@ def simulate_reroute_endpoint(req: RerouteReq):
         raise HTTPException(422, "Intermediate facility equals destination")
     return simulate_reroute(_ctx(), req.lat, req.lon, req.destination, req.via,
                             _parse(req.depart_at) if req.depart_at else None,
-                            req.truck.model_dump(), req.transfer_minutes)
+                            req.truck.model_dump(), req.transfer_minutes, req.avoid_weather)
 
 
 @app.get("/api/traffic-tiles/{z}/{x}/{y}.png")

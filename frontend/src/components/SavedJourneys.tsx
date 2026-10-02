@@ -27,16 +27,16 @@ export function SavedJourneys({ nodes, refreshKey, onReview }: { nodes: NetNode[
   const mine = (ships ?? []).filter((s) => s.data_kind !== "demo");
 
   return (
-    <section className="card saved-journeys">
-      <div className="card__h">
+    <details className="card saved-journeys" open>
+      <summary className="card__h saved-journeys-summary">
         <div>
           <h2><Save size={15} className="h-ic" /> Saved journeys <span className="mini">{mine.length}</span></h2>
-          <div className="sub">Every plan you save lands here and in the control room review queue.</div>
+          <div className="sub">Plans awaiting manager review</div>
         </div>
-        <button className="icon-button" aria-label="Refresh saved journeys" onClick={() => void load()}>
+        <button className="icon-button" aria-label="Refresh saved journeys" onClick={(e) => { e.preventDefault(); void load(); }}>
           <RefreshCw size={14} className={busy ? "spin" : ""} />
         </button>
-      </div>
+      </summary>
 
       {error && <div role="alert" className="notice notice--warn">{error}</div>}
 
@@ -79,6 +79,6 @@ export function SavedJourneys({ nodes, refreshKey, onReview }: { nodes: NetNode[
           <button className="linkbtn" onClick={onReview}>Open control room <ArrowUpRight size={13} /></button>
         </div>
       )}
-    </section>
+    </details>
   );
 }

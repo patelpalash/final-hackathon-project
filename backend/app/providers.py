@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import time
+import httpx
 from datetime import datetime, timezone
 from .live import Forecasts, TomTom
 
@@ -98,6 +99,7 @@ class RoutingProvider(Provider):
     def __init__(self):
         super().__init__("routing", "OSRM (public)", True, "LIVE")
         self.legs = {}
+        self.client = httpx.Client(timeout=3.0)
 
     def leg(self, from_ll, to_ll):
         return self.via(from_ll,to_ll,[])
@@ -109,10 +111,9 @@ class RoutingProvider(Provider):
             return cached[1]
         self.last_attempt = _now()
         try:
-            import httpx
             stops=";".join(f"{lon},{lat}" for lat,lon in [from_ll,*via,to_ll])
             url = f"https://router.project-osrm.org/route/v1/driving/{stops}"
-            r = httpx.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=3.0)
+            r = self.client.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=3.0)
             r.raise_for_status()
             route = r.json()["routes"][0]
             self.last_success = _now(); self.data_timestamp = _now(); self.error = None
@@ -146,6 +147,10 @@ class Providers:
         self.traffic = TrafficProvider()
         self.routing = RoutingProvider()
         self.holidays = HolidayProvider(holidays)
+
+    def close(self):
+        for provider in (self.forecasts,self.tomtom,self.routing):
+            provider.client.close()
 
     def all(self):
         self.weather.error = self.forecasts.error

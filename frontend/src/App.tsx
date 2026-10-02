@@ -1,22 +1,22 @@
-import { useEffect, useState } from "react";
-import { LayoutDashboard, Truck, Route, PiggyBank, BarChart3, RefreshCw, ShieldCheck, CloudSun, BookOpen, ArrowUpRight, Activity } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Truck, Route, PiggyBank, BarChart3, RefreshCw, ShieldCheck, CloudSun, BookOpen, ArrowUpRight, Activity } from "lucide-react";
 import { api } from "./api/client";
 import type { NetworkDoc, Provider, Operations } from "./api/types";
 import { statusClass } from "./lib";
-import { Dashboard } from "./views/Dashboard";
 import { Shipments } from "./views/Shipments";
 import { Planner } from "./views/Planner";
 import { Savings } from "./views/Savings";
 import { Analytics } from "./views/Analytics";
-import { WeatherLab } from "./views/WeatherLab";
 import { ControlRoom } from "./views/ControlRoom";
 import { Assumptions } from "./views/Assumptions";
+import { DACHSER_LOGO } from "./logo";
 const TABS = [
-  { id:"planner", label:"Route planner", icon:Route }, { id:"dashboard", label:"Overview", icon:LayoutDashboard },
+  { id:"planner", label:"Route planner", icon:Route },
   { id:"control", label:"Control room", icon:ShieldCheck }, { id:"shipments", label:"Shipments", icon:Truck },
-  { id:"weather", label:"Weather lab", icon:CloudSun }, { id:"analytics", label:"Network intelligence", icon:BarChart3 },
+  { id:"analytics", label:"Network intelligence", icon:BarChart3 },
   { id:"savings", label:"Savings", icon:PiggyBank }, { id:"assumptions", label:"Assumptions", icon:BookOpen }
 ];
+const PRIMARY_TABS = ["planner", "control", "shipments", "analytics", "savings"];
 export default function App() {
   const [tab, setTab] = useState("planner");
   const [visited, setVisited] = useState<Set<string>>(() => new Set(["planner"]));
@@ -25,8 +25,10 @@ export default function App() {
   const [ops, setOps] = useState<Operations | null>(null);
   const [tick, setTick] = useState(0);
   const [err, setErr] = useState("");
+  const moreMenu = useRef<HTMLDetailsElement>(null);
 
   const selectTab = (id: string) => {
+    if (moreMenu.current) moreMenu.current.open = false;
     setTab(id);
     setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
     setTimeout(() => window.dispatchEvent(new Event("resize")), 50);
@@ -54,17 +56,17 @@ export default function App() {
     <div className="app-shell">
       <header className="workspace-header">
         <a href="#" className="brand" onClick={(e) => { e.preventDefault(); selectTab("planner"); }}>
-          <span className="brand-icon"><Route size={22} /></span>
-          <span>transit<span className="brand-dot">.</span><small>OPERATIONS WORKSPACE</small></span>
+          <img src={DACHSER_LOGO} alt="DACHSER" className="brand-logo" />
+          <small>LIVE TRANSIT PLANNER</small>
         </a>
-        <span className="workspace-label">DACHSER / Challenge 03</span>
+        <span className="workspace-label">CHALLENGE 03</span>
         <div className="top__spacer" />
         <span className="prototype-tag">HACKATHON PROTOTYPE</span>
         <button className="icon-button" aria-label="Refresh workspace" onClick={refresh}><RefreshCw size={17} /></button>
         <span className="avatar" title="Demo manager">MK</span>
       </header>
       <nav className="workspace-nav" aria-label="Workspace navigation">
-        {TABS.map((t) => (
+        {TABS.filter((t) => PRIMARY_TABS.includes(t.id)).map((t) => (
           <button
             key={t.id}
             aria-current={tab === t.id ? "page" : undefined}
@@ -75,6 +77,16 @@ export default function App() {
             {t.label}
           </button>
         ))}
+        <details className="workspace-more" ref={moreMenu}>
+          <summary className={PRIMARY_TABS.includes(tab) ? "" : "active"}>More{PRIMARY_TABS.includes(tab) ? "" : ` · ${TABS.find((t) => t.id === tab)?.label}`}</summary>
+          <div className="workspace-more-menu">
+            {TABS.filter((t) => !PRIMARY_TABS.includes(t.id)).map((t) => (
+              <button key={t.id} className={tab === t.id ? "active" : ""} aria-current={tab === t.id ? "page" : undefined} onClick={() => selectTab(t.id)}>
+                <t.icon size={16} />{t.label}
+              </button>
+            ))}
+          </div>
+        </details>
       </nav>
       <main className="wrap">
         <div className="page-meta">
@@ -82,10 +94,10 @@ export default function App() {
           <span><Activity size={12} /> {nodes.length} facilities · {ops?.events.length ?? 0} scenario events</span>
         </div>
         {err && <div role="alert" className="notice notice--warn">Connection issue: {err}<button className="linkbtn" onClick={refresh}>Retry</button></div>}
-        {alerts.length > 0 && tab !== "weather" && (
-          <button className="alert-strip" onClick={() => selectTab("weather")}>
+        {alerts.length > 0 && tab !== "control" && (
+          <button className="alert-strip" onClick={() => selectTab("control")}>
             <CloudSun size={18} />
-            <span><b>{alerts.length} weather alert{alerts.length > 1 ? "s" : ""}</b> · Manual samples affect matching journeys during their time windows.</span>
+            <span><b>{alerts.length} weather alert{alerts.length > 1 ? "s" : ""}</b> · Review active conditions in the control room.</span>
             <ArrowUpRight size={17} />
           </button>
         )}
@@ -95,22 +107,8 @@ export default function App() {
             <Planner nodes={nodes} revision={ops?.revision ?? 0} onChange={refresh} onReview={() => selectTab("control")} />
           )}
         </div>
-        <div style={{ display: tab === "dashboard" ? "block" : "none" }}>
-          {visited.has("dashboard") && (
-            <>
-              <div className="page-heading">
-                <div><span className="eyebrow">THE BIG PICTURE</span><h1>Every shipment. In focus.</h1><p>Your network, priorities and exceptions in one place.</p></div>
-                <button className="btn" onClick={() => selectTab("planner")}>Plan a shipment <ArrowUpRight size={16} /></button>
-              </div>
-              <Dashboard key={tick} />
-            </>
-          )}
-        </div>
         <div style={{ display: tab === "control" ? "block" : "none" }}>
           {visited.has("control") && <ControlRoom nodes={nodes} onChange={refresh} />}
-        </div>
-        <div style={{ display: tab === "weather" ? "block" : "none" }}>
-          {visited.has("weather") && <WeatherLab nodes={nodes} onChange={refresh} />}
         </div>
         <div style={{ display: tab === "shipments" ? "block" : "none" }}>
           {visited.has("shipments") && <Shipments nodes={nodes} />}

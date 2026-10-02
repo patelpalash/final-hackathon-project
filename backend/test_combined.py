@@ -147,7 +147,7 @@ def test_live_forecast_threshold_and_timestamp(monkeypatch):
     import httpx
     at=dt("2026-09-22T08:00:00+00:00")
     payload={"hourly":{"time":[at.timestamp()],"temperature_2m":[4],"precipitation":[0],"snowfall":[5],"visibility":[500],"wind_speed_10m":[35],"weather_code":[75]}}
-    monkeypatch.setattr(httpx,"get",lambda *args,**kwargs:SimpleNamespace(raise_for_status=lambda:None,json=lambda:payload))
+    monkeypatch.setattr(httpx.Client,"get",lambda *args,**kwargs:SimpleNamespace(raise_for_status=lambda:None,json=lambda:payload))
     rows=Forecasts().fetch([(49,9)],[at])
     assert rows[0]["source"]=="Open-Meteo forecast" and rows[0]["status"]=="FORECAST"
     assert rows[0]["delay_minutes"]==120 and rows[0]["valid_at"]==at.isoformat()

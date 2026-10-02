@@ -190,6 +190,36 @@ function popup(text: string) {
   return new maplibregl.Popup({ offset: 15, maxWidth: "280px" }).setText(text);
 }
 
+function routePointForIncident(incident: Incident, route: number[][]): [number, number] | null {
+  if (route.length < 2) return null;
+  const incidentPoints: [number, number][] = [];
+  const collect = (value: unknown) => {
+    if (!Array.isArray(value)) return;
+    if (value.length >= 2 && typeof value[0] === "number" && typeof value[1] === "number") {
+      incidentPoints.push([value[0], value[1]]);
+      return;
+    }
+    value.forEach(collect);
+  };
+  collect(incident.geometry.coordinates);
+  let bestDistance = Infinity;
+  let bestPoint: [number, number] | null = null;
+  for (const [lon, lat] of incidentPoints) {
+    const scaleX = 111.32 * Math.cos((lat * Math.PI) / 180);
+    for (let i = 1; i < route.length; i++) {
+      const a = route[i - 1], b = route[i];
+      const dx = (b[0] - a[0]) * scaleX, dy = (b[1] - a[1]) * 111.32;
+      const px = (lon - a[0]) * scaleX, py = (lat - a[1]) * 111.32;
+      const t = Math.max(0, Math.min(1, (px * dx + py * dy) / (dx * dx + dy * dy || 1)));
+      const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+      const distance = Math.hypot((lon - x) * scaleX, (lat - y) * 111.32);
+      if (distance < bestDistance) { bestDistance = distance; bestPoint = [x, y]; }
+    }
+  }
+  // TomTom queries a corridor around the road; only display incidents within 1 km of this route.
+  return bestDistance <= 1 ? bestPoint : null;
+}
+
 const EMPTY_ZONES: WeatherZone[] = [];
 
 export function LiveMap({
@@ -217,7 +247,7 @@ export function LiveMap({
   nodes: NetNode[];
   path: string[];
   geometry?: number[][] | null;
-  comparisonGeometry?: number[][] | null;
+  comparisonGeometry?: number[][][] | null;
   alternatives?: RouteOption[];
   onSelect?: (i: number) => void;
   routeWeather?: LiveWeather[];
@@ -246,10 +276,12 @@ export function LiveMap({
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
 
-  const [fallback, setFallback] = useState(!hasWebGL());
-  const [basemap, setBasemap] = useState<BasemapId>("voyager");
-  const activeBasemap = useRef<BasemapId>("voyager");
+  const [webglAvailable] = useState(hasWebGL);
+  const [fallback, setFallback] = useState(!webglAvailable);
+  const [basemap, setBasemap] = useState<BasemapId>("osm");
+  const activeBasemap = useRef<BasemapId>("osm");
   const failedBasemaps = useRef(new Set<BasemapId>());
+  const baseTileFailures = useRef({ count: 0, since: 0 });
   const [styleVersion, setStyleVersion] = useState(0);
   const [ready, setReady] = useState(false);
   const [data, setData] = useState<MapConditions | null>(null);
@@ -324,7 +356,8 @@ export function LiveMap({
     if (frame.length < 2) return;
     const b = new maplibregl.LngLatBounds();
     frame.forEach((p) => b.extend([p[0], p[1]]));
-    m.fitBounds(b, { padding: 45, maxZoom: 9, duration: 450 });
+    // Avoid intermediate zoom tiles when switching between distant route options.
+    m.fitBounds(b, { padding: 45, maxZoom: 9, duration: 0 });
   }, [planned, coords]);
 
   // Fit bounds when route changes or map becomes ready, but never during simulation frame updates
@@ -367,6 +400,7 @@ export function LiveMap({
     setReady(false);
     loadedMap.current = null;
     activeBasemap.current = basemap;
+    baseTileFailures.current = { count: 0, since: 0 };
     let m: maplibregl.Map;
     try {
       m = new maplibregl.Map({
@@ -393,11 +427,18 @@ export function LiveMap({
       const message = String(e.error?.message ?? "");
       if (/traffic-tiles/.test(message)) {
         setError("Traffic layer unavailable. Road routes remain visible.");
-      } else if (activeBasemap.current === "osm"
-        ? /map-tiles/.test(message) || (e as { sourceId?: string }).sourceId === "osm"
-        : /tiles\.openfreemap\.org/.test(message) || (!m.isStyleLoaded() && /style|fetch|network/i.test(message))) {
-        recoverBasemap();
+        return;
       }
+      const sourceId = (e as { sourceId?: string }).sourceId;
+      const baseFailed = activeBasemap.current === "osm"
+        ? sourceId === "osm" || /map-tiles/.test(message)
+        : sourceId === "openmaptiles" || sourceId === "ne2_shaded" || /tiles\.openfreemap\.org/.test(message);
+      const styleFailed = !sourceId && !m.isStyleLoaded() && /style|fetch|network/i.test(message);
+      if (styleFailed) { recoverBasemap(); return; }
+      if (!baseFailed && !(sourceId == null && /failed to fetch|network error/i.test(message))) return;
+      const now = Date.now();
+      if (now - baseTileFailures.current.since > 8000) baseTileFailures.current = { count: 0, since: now };
+      if (++baseTileFailures.current.count >= 3) recoverBasemap();
     });
 
     m.addControl(new maplibregl.NavigationControl(), "top-right");
@@ -429,6 +470,7 @@ export function LiveMap({
     if (!m || activeBasemap.current === basemap) return;
     try {
       activeBasemap.current = basemap;
+      baseTileFailures.current = { count: 0, since: 0 };
       loadedMap.current = null;
       setReady(false);
       m.setStyle(BASEMAPS[basemap].spec, { diff: false });
@@ -548,9 +590,9 @@ export function LiveMap({
     const m = map.current;
     if (!m || !ready || loadedMap.current !== m) return;
     const source = m.getSource("weather-comparison") as maplibregl.GeoJSONSource | undefined;
-    if (source) source.setData({ type: "FeatureCollection", features: comparisonGeometry && comparisonGeometry.length > 1 ? [{
-      type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: comparisonGeometry },
-    }] : [] });
+    if (source) source.setData({ type: "FeatureCollection", features: (comparisonGeometry ?? []).filter(line => line.length > 1).map((line, index) => ({
+      type: "Feature" as const, properties: { index }, geometry: { type: "LineString" as const, coordinates: line },
+    })) });
   }, [ready, styleVersion, comparisonKey, comparisonGeometry]);
 
   // Update abandoned leg geometry for simulation reroute
@@ -685,35 +727,28 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
     if (!m || !ready || loadedMap.current !== m) return;
     incidentMarkers.current.forEach((x) => x.remove());
     incidentMarkers.current = [];
-    if (incidents && offset <= 0) {
-      incidentMarkers.current = (data?.incidents.items ?? []).map((i) => {
-        const c = i.geometry.type === "Point" ? (i.geometry.coordinates as number[]) : (i.geometry.coordinates as number[][])[0];
+    if (traffic && incidents && offset <= 0) {
+      incidentMarkers.current = (data?.incidents.items ?? []).flatMap((i) => {
+        const c = routePointForIncident(i, planned);
+        if (!c) return [];
         const el = document.createElement("button");
         el.className = "incident-marker";
         el.textContent = "!";
         el.title = i.description;
-        return new maplibregl.Marker({ element: el })
-          .setLngLat([c[0], c[1]])
+        return [new maplibregl.Marker({ element: el })
+          .setLngLat(c)
           .setPopup(popup(`${i.description}\n${i.delay_minutes}m reported delay · ${i.source}\nCurrent incident near route; exact impact comes from routing.`))
-          .addTo(m);
+          .addTo(m)];
       });
     }
-    if (data?.traffic_configured && !m.getSource("traffic-flow")) {
-      m.addSource("traffic-flow", {
-        type: "raster",
-        tiles: [`${new URL(BASE, window.location.href).href.replace(/\/$/, "")}/traffic-tiles/{z}/{x}/{y}.png`],
-        tileSize: 256,
-        attribution: "Traffic © TomTom",
-      });
-      m.addLayer({ id: "traffic-flow-layer", type: "raster", source: "traffic-flow", paint: { "raster-opacity": 0.7 } }, "alternatives-line");
-    }
-    if (m.getLayer("traffic-flow-layer")) {
-      m.setLayoutProperty("traffic-flow-layer", "visibility", traffic && offset <= 0 ? "visible" : "none");
-    }
+    // TomTom's flow tiles cover the full viewport. Show only traffic sections
+    // returned with the selected route, so nearby roads stay visually clear.
+    if (m.getLayer("traffic-flow-layer")) m.removeLayer("traffic-flow-layer");
+    if (m.getSource("traffic-flow")) m.removeSource("traffic-flow");
     if (m.getLayer("traffic-sections-line")) {
       m.setLayoutProperty("traffic-sections-line", "visibility", traffic && offset <= 0 ? "visible" : "none");
     }
-  }, [ready, styleVersion, data, traffic, incidents, offset]);
+  }, [ready, styleVersion, data, traffic, incidents, offset, conditionsKey]);
 
   // Simulated vehicle marker
   useEffect(() => {
@@ -794,8 +829,6 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
           {[
             ["Weather", wx, setWx, CloudSun],
             ["Traffic", traffic, setTraffic, Car],
-            ["Incidents", incidents, setIncidents, TriangleAlert],
-            ["Hubs", hubs, setHubs, LocateFixed],
           ].map(([label, enabled, setter, Icon]) => {
             const I = Icon as typeof CloudSun;
             return (
@@ -810,6 +843,17 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
               </button>
             );
           })}
+          <details className="map-settings">
+            <summary>Map settings</summary>
+            <div className="map-settings-menu">
+              {([
+                ["Incidents", incidents, setIncidents, TriangleAlert],
+                ["Hubs", hubs, setHubs, LocateFixed],
+              ] as const).map(([label, enabled, setter, Icon]) => (
+                <button key={label} aria-pressed={enabled} onClick={() => setter(!enabled)}>
+                  <Icon size={13} />{label}
+                </button>
+              ))}
           <div className="basemap-selector" style={{ display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2 }}>
             <span style={{ fontSize: "11px", color: "var(--muted)", fontWeight: 600 }}>Map:</span>
             <select
@@ -840,6 +884,8 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
             <Key size={13} />
             {settings?.tomtom_configured ? "TomTom: Live" : "Traffic: Simulated (Add Key)"}
           </button>
+            </div>
+          </details>
         </div>
         <div className="map-actions">
           <button aria-label="Fit route" onClick={fit}><LocateFixed size={15} /></button>
@@ -871,7 +917,7 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
         </label>
         <span>
           {loading ? "Fetching conditions…" : `Updated ${data ? dt(data.fetched_at) : "—"}`}
-          <small>{demo ? "Demo replay · live overlays disabled" : offset > 0 ? "Future weather only · current traffic layer hidden" : "Traffic: current conditions · weather: forecast"}</small>
+          <small>{demo ? "Demo replay · live overlays disabled" : offset > 0 ? "Future weather · traffic hidden" : `Traffic ${data?.traffic_configured ? "live" : "simulated"} · weather forecast`}</small>
         </span>
       </div>
       <MapWeatherSimulation mapRef={map} mapContainerRef={ref} ready={ready} styleVersion={styleVersion}
@@ -884,17 +930,13 @@ Weather impact rule: +${w.delay_minutes ?? 0}m (estimate)`))
       <div className="map-legend">
         <span><i style={{ background: "#17765e" }} /> Selected route</span>
         <span><i style={{ background: "#82909c" }} /> Alternatives · click to compare</span>
-        {comparisonGeometry && <span><i className="legend-dash" style={{ background: "#d86135" }} /> Weather-affected road</span>}
+        {!!comparisonGeometry?.length && <span><i className="legend-dash" style={{ background: "#d86135" }} /> Weather-affected segment</span>}
         <span><i style={{ background: "#de7043" }} /> Traffic impact</span>
         {weatherZones.length > 0 && <span><i style={{ background: "#d15e7d" }} /> Simulated weather zone</span>}
         {sim?.ghostCoords && <span><i className="legend-dash" style={{ background: "#c0392b" }} /> Abandoned leg</span>}
       </div>
-      {data && !data.traffic_configured && (
-        <div className="map-note">
-          Traffic is running in realistic <b>SIMULATED</b> mode (A81/A6 corridors). Click "Traffic: Simulated" above to configure a live TomTom key.
-        </div>
-      )}
       {data?.incidents.status === "ERROR" && <div className="map-note">Traffic incidents could not be refreshed. Coverage may be incomplete.</div>}
+      {fallback && webglAvailable && <div className="map-note">Road-map tiles are temporarily unavailable. <button className="linkbtn" onClick={() => { failedBasemaps.current.clear(); baseTileFailures.current = { count: 0, since: 0 }; setBasemap("osm"); setError(""); setFallback(false); }}>Retry road map</button></div>}
       {error && <div role="alert" className="map-note">{error}</div>}
       <details className="weather-readout">
         <summary>Weather along the route · {forecasts.filter((w) => w.status === "FORECAST").length} forecast samples</summary>

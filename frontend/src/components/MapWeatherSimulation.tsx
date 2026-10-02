@@ -53,10 +53,10 @@ export function MapWeatherSimulation({
   const [error, setError] = useState("");
   const [pixels, setPixels] = useState<Record<string, { left: number; top: number; size: number }>>({});
 
-  const active = useMemo(() => demo ? [] : weatherZones.filter(z =>
+  const active = useMemo(() => weatherZones.filter(z =>
     !plannedStart || !plannedEnd ||
     (Date.parse(z.start) < Date.parse(plannedEnd) && Date.parse(z.end) > Date.parse(plannedStart))
-  ), [demo, weatherZones, plannedStart, plannedEnd]);
+  ), [weatherZones, plannedStart, plannedEnd]);
 
   async function save(work: () => Promise<void>) {
     setBusy(true);
@@ -182,10 +182,10 @@ export function MapWeatherSimulation({
   const enabled = !demo && !!onAddWeatherZone;
 
   return <>
-    {enabled && <div className="weather-simulator">
-      <div className="weather-simulator-heading"><strong>Weather simulation</strong><span>Manual scenario · drag onto the selected road</span>
-        {(active.length > 0 || kind) && <button type="button" className="sim-cancel-weather" disabled={busy} onClick={cancelWeatherSimulation}>× Cancel weather simulation</button>}
-      </div>
+    {enabled && <details className="weather-simulator" open={active.length > 0 || !!kind}>
+      <summary className="weather-simulator-heading"><strong>Weather simulation {active.length > 0 ? `· ${active.length} active` : ""}</strong><span>Drop snow, rain or tornado on the route</span>
+        {(active.length > 0 || kind) && <button type="button" className="sim-cancel-weather" disabled={busy} onClick={(e) => { e.preventDefault(); void cancelWeatherSimulation(); }}>× Cancel weather simulation</button>}
+      </summary>
       <div className="weather-simulator-tools">
         <div className="hazard-palette">{HAZARDS.map(h => <button key={h.kind} type="button" draggable={!busy && !fallback} disabled={busy}
           aria-pressed={kind === h.kind}
@@ -199,7 +199,7 @@ export function MapWeatherSimulation({
       </div>
       <small>{fallback ? "Map interaction is unavailable here; choose a weather type and use Place on route." :
         "Choose a weather type, then click the map or drag it to a road section. Drag its pin to move it."}</small>
-    </div>}
+    </details>}
     <div className="map-viewport" onDragOver={e => { if (e.dataTransfer.types.includes("application/x-weather-kind")) e.preventDefault(); }} onDrop={drop}>
       {children}
       {enabled && !fallback && active.map(zone => {
@@ -215,14 +215,14 @@ export function MapWeatherSimulation({
       {enabled && kind && !fallback && <button className="sim-place-layer" aria-label={`Place ${kind} weather zone on map`} onClick={clickPlace}>
         <span>Click to place {kind} zone</span></button>}
     </div>
-    {enabled && <div className="sim-zone-status"><strong>{busy ? "Recalculating road options…" :
+    {enabled && active.length > 0 && <div className="sim-zone-status"><strong>{busy ? "Recalculating road options…" :
       avoidanceStatus === "CLEAR" ? "Verified clear road detour" :
       avoidanceStatus === "NO_CLEAR_DETOUR" ? "No clear road detour found" :
       avoidanceStatus === "IMPACTED" ? "Selected road crosses a simulated zone" :
       active.length ? "Zone misses this selected road" : "No map weather zone active"}</strong>
       <span>{avoidanceStatus === "CLEAR" ? "Road geometry checked against every active zone with 2 km clearance." :
         "Weather zones are a manual what-if simulation; live forecast markers remain separate."}</span></div>}
-    {enabled && weatherZones.length > 0 && <div className="sim-zone-list">{weatherZones.map(zone => <div key={zone.id} className={selected === zone.id ? "is-selected" : ""}>
+    {enabled && active.length > 0 && <div className="sim-zone-list">{active.map(zone => <div key={zone.id} className={selected === zone.id ? "is-selected" : ""}>
       <button type="button" onClick={() => { setSelected(zone.id); setRadius(zone.radius_km); mapRef.current?.flyTo({ center: [zone.lon, zone.lat], zoom: Math.max(mapRef.current.getZoom(), 7) }); }}>
         {HAZARDS.find(h => h.kind === zone.kind)?.icon} {zone.kind} · {zone.radius_km} km</button>
       <span>{active.some(a => a.id === zone.id) ? "This trip" : "Other time"}</span>

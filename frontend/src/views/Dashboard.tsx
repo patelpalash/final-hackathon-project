@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Package, AlertTriangle, Gem, PiggyBank, Factory, CalendarDays, Gauge, History, CloudLightning } from "lucide-react";
+import { Package, AlertTriangle, Gem, PiggyBank, Factory, CalendarDays, History, CloudLightning } from "lucide-react";
 import { api } from "../api/client";
-import type { Dashboard as Dash, Holiday, AuditEvent, HighValue, Provider, Disruption } from "../api/types";
-import { eur, dt, statusClass, riskCls } from "../lib";
+import type { Dashboard as Dash, Holiday, AuditEvent, HighValue, Disruption } from "../api/types";
+import { eur, dt, riskCls } from "../lib";
 
 export function Dashboard() {
   const [d, setD] = useState<Dash | null>(null);
@@ -18,7 +18,6 @@ export function Dashboard() {
     api.disruptions().then((r) => setDis(r.historical)).catch(() => {});
   };
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
-  const providers: Provider[] = d?.providers ?? [];
   return (
     <>
       <div className="tiles">
@@ -47,13 +46,6 @@ export function Dashboard() {
           <div className="card__h"><div><h2><CalendarDays size={15} className="h-ic" /> Upcoming holidays</h2><div className="sub">kalender.csv · driving-ban impact</div></div></div>
           <div className="he">
             {hol.map((h) => <div className="row" key={h.date}><span><b>{h.date}</b> · {h.name}</span><span style={{ color: "var(--warn)", fontWeight: 700, fontSize: 11 }}>ban risk</span></div>)}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card__h"><div><h2><Gauge size={15} className="h-ic" /> Data sources</h2><div className="sub">LIVE only on a real fetch</div></div></div>
-          <div className="he">
-            {providers.map((p) => <div className="row" key={p.key}><span>{p.name}<div style={{ fontSize: 11, color: "var(--muted)" }}>{p.kind}</div></span><span className={statusClass(p.status)}><span className="dot" /> {p.status.replace("_", " ")}</span></div>)}
           </div>
         </div>
 

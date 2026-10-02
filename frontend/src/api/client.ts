@@ -33,7 +33,7 @@ export const api = {
   dashboard: () => req<Dashboard>("/dashboard"),
   savings: () => req<SavingsResp>("/savings"),
   recalculateSavings: () => req<SavingsResp>("/savings/recalculate", { method: "POST" }),
-  simulateReroute: (body: { lat: number; lon: number; destination: string; via?: string; depart_at?: string; truck?: TruckProfile; transfer_minutes?: number }) =>
+  simulateReroute: (body: { lat: number; lon: number; destination: string; via?: string; depart_at?: string; truck?: TruckProfile; transfer_minutes?: number; avoid_weather?: boolean }) =>
     req<RerouteResp>("/simulate/reroute", { method: "POST", body: JSON.stringify(body) }),
   highValue: () => req<{ shipments: HighValue[] }>("/high-value"),
   relations: () => req<{ relations: RelationStat[] }>("/analytics/relations"),

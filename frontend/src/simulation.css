@@ -29,6 +29,9 @@
 .sim-disrupt{margin-left:auto;display:inline-flex;align-items:center;gap:6px;background:#fdf1ec;color:#a8482c;
   border:1px solid #f0d4c8;border-radius:9px;padding:9px 13px;font-size:11.5px;font-weight:700;cursor:pointer}
 .sim-disrupt:disabled{opacity:.45;cursor:default}
+.sim-weather-reroute{display:inline-flex;align-items:center;gap:6px;background:#eaf5ef;color:#1b6251;
+  border:1px solid #cce4d6;border-radius:9px;padding:9px 13px;font-size:11.5px;font-weight:700;cursor:pointer}
+.sim-weather-reroute:disabled{opacity:.45;cursor:default}
 .sim-track{height:6px;border-radius:99px;background:#e4ece8;margin:14px 0 12px;overflow:hidden}
 .sim-track span{display:block;height:100%;background:#17765e;border-radius:99px;transition:width .06s linear}
 .sim-track span.diverted{background:linear-gradient(90deg,#17765e 60%,#c98410)}
@@ -98,7 +101,7 @@
   .savings-headline-main strong{font-size:32px}
 }
 @media(max-width:760px){
-  .sim-disrupt{margin-left:0;width:100%;justify-content:center}
+  .sim-disrupt,.sim-weather-reroute{margin-left:0;width:100%;justify-content:center}
   .sim-reroute-values{gap:18px}
   .savings-breakdown{gap:18px}
 }

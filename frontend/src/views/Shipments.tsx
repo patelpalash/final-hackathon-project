@@ -21,14 +21,33 @@ export function Shipments({ nodes }: { nodes: NetNode[] }) {
     if (f.delayed) q.set("delayed", "true");
     api.shipments("?" + q.toString()).then((r) => setShips(r.shipments)).catch(() => {});
   }
-  useEffect(load, [f]);
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, 60_000);
+    return () => window.clearInterval(timer);
+  }, [f]);
   return (
     <>
       <div className="card">
         <div className="card__h"><div><h2><Truck size={15} className="h-ic" /> Shipments</h2><div className="sub">plan → compare → schedule (with feasibility check)</div></div>
           <button className="btn btn--sm" onClick={() => setCreating(true)}><Plus size={14} /> New shipment</button></div>
+        <details className="shipment-guide" open>
+          <summary>How to read these shipment fields</summary>
+          <dl>
+            <div><dt>ID</dt><dd>App-generated reference for this shipment record.</dd></div>
+            <div><dt>Route</dt><dd>The planned branch-to-branch path; arrows show any intermediate hub stops.</dd></div>
+            <div><dt>Status</dt><dd>PLANNED awaits approval. ON HOLD stays paused until a fresh clear route is approved. SCHEDULED moves to IN TRANSIT at departure, DELAYED if its deadline passes, and DELIVERED after its ETA.</dd></div>
+            <div><dt>ETA / Required</dt><dd>ETA is the estimated arrival; Required is the delivery deadline entered for the shipment.</dd></div>
+            <div><dt>Delay</dt><dd>How late the estimated arrival is against the required deadline. A dash means it is not currently late.</dd></div>
+            <div><dt>Weight / Value</dt><dd>Shipment inputs used for capacity, estimated cost and risk calculations.</dd></div>
+            <div><dt>Cost</dt><dd>Estimated transport cost from lane tariffs or a prototype estimate; it is not a final invoice.</dd></div>
+            <div><dt>Risk</dt><dd>Summarizes deadline slack, wait rules, lane history and shipment value.</dd></div>
+            <div><dt>Alert</dt><dd>A specific warning, such as a missed delivery deadline.</dd></div>
+          </dl>
+          <p>Time-based statuses are estimates, not live GPS or proof of delivery. The list refreshes every minute. Select a row to compare route options and schedule one.</p>
+        </details>
         <div className="filters">
-          <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="">All statuses</option>{["PLANNED", "SCHEDULED", "IN TRANSIT", "DELAYED", "DELIVERED"].map((s) => <option key={s}>{s}</option>)}</select>
+          <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="">All statuses</option>{["PLANNED", "SCHEDULED", "ON HOLD", "IN TRANSIT", "DELAYED", "DELIVERED"].map((s) => <option key={s}>{s}</option>)}</select>
           <label style={{ fontSize: 12.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={f.at_risk} onChange={(e) => setF({ ...f, at_risk: e.target.checked })} /> At risk</label>
           <label style={{ fontSize: 12.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={f.high_value} onChange={(e) => setF({ ...f, high_value: e.target.checked })} /> High-value</label>
           <label style={{ fontSize: 12.5, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={f.delayed} onChange={(e) => setF({ ...f, delayed: e.target.checked })} /> Delayed</label>
@@ -41,7 +60,7 @@ export function Shipments({ nodes }: { nodes: NetNode[] }) {
                 <tr key={s.id} style={{ cursor: "pointer" }} onClick={() => api.shipment(s.id).then(setDetail)}>
                   <td><b>{s.id}</b></td>
                   <td>{s.route.map(name).join(" → ")}</td>
-                  <td><span className={stCls(s.status)}>{s.status}</span></td>
+                  <td><span className={stCls(s.status)} title={s.status === "DELIVERED" ? "Inferred because the planned ETA has passed; actual delivery is unverified." : undefined}>{s.status}</span></td>
                   <td>{dt(s.current_eta)}</td><td style={{ color: "var(--muted)" }}>{dt(s.required_delivery)}</td>
                   <td className="num">{s.delay_minutes ? <span style={{ color: "var(--bad)", fontWeight: 700 }}>{hm(s.delay_minutes)}</span> : "—"}</td>
                   <td className="num">{(s.weight_kg / 1000).toFixed(1)}t</td><td className="num">{eur(s.value_eur)}</td><td className="num">{eur(s.est_cost_eur)}</td>
