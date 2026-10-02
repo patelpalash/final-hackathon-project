@@ -31,7 +31,7 @@ export const api = {
   holidays: () => req<{ source: string; upcoming: Holiday[]; count: number }>("/holidays"),
   audit: () => req<{ events: AuditEvent[] }>("/audit"),
   dashboard: () => req<Dashboard>("/dashboard"),
-  savings: () => req<SavingsResp>("/savings"),
+  savings: (scope:"estimated"|"demo"="estimated") => req<SavingsResp>(`/savings?scope=${scope}`),
   recalculateSavings: () => req<SavingsResp>("/savings/recalculate", { method: "POST" }),
   simulateReroute: (body: { lat: number; lon: number; destination: string; via?: string; depart_at?: string; truck?: TruckProfile; transfer_minutes?: number; avoid_weather?: boolean }) =>
     req<RerouteResp>("/simulate/reroute", { method: "POST", body: JSON.stringify(body) }),

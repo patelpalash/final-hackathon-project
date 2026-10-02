@@ -70,8 +70,11 @@ export interface SavingsRow {
   money_eur: number; fuel_l: number; time_min: number; time_value_eur: number;
   disruption_eur: number; exposure_avoided_eur: number; benefit_eur: number;
   comparable: boolean; disruption: DisruptionSavings | null;
+  data_kind:"estimated"|"demo"; excluded_reason:string|null;
+  evidence:{quote_id:string|null;approved_at:string|null;manager_reason:string|null;evaluated_at:string|null;baseline:string|null;source:string|null;revision:number|null;arrival:string|null;outcome_recorded:boolean};
 }
 export interface SavingsResp {
+  scope:"estimated"|"demo"; excluded_count:number; unapproved_count:number; demo_excluded_count:number;
   total: SavingsTotals; avg_per_shipment_eur: number; per_shipment: SavingsRow[];
   legacy_count: number; rerouted_count: number;
   assumptions: { value_of_time_eur_per_hour: number; note: string };
@@ -97,5 +100,6 @@ export interface Operations { revision: number; weather: WeatherRecord[]; weathe
 export interface Service { id:string; origin:string; destination:string; weekdays:number[]; departure_time:string; timezone:string; cutoff_minutes:number; source:string; }
 export interface PlanChange { material:boolean; reasons:string[]; eta_minutes:number; cost_eur:number; previous_eta?:string; proposed_eta?:string; previous_cost?:number; proposed_cost?:number; evaluated_at?:string; }
 export interface ActualOutcome { actual_departure:string; actual_arrival:string; actual_cost_eur:number; arrival_error_minutes:number; cost_error_eur:number; on_time:boolean|null; source:string; }
-export interface Performance { samples:number; minimum_samples:number; status:string; arrival_mae_minutes:number|null; cost_error_eur:number|null; on_time_pct:number|null; deadline_samples:number; source:string; }
+export interface ActualEvidence { id:string;route:string[];quote_id:string;approved_at:string;recorded_at:string|null;approved_eta:string;actual_arrival:string;actual_cost_eur:number;approved_cost_eur:number;arrival_error_minutes:number;cost_error_eur:number;on_time:boolean|null;source:string; }
+export interface Performance { samples:number; minimum_samples:number; status:string; arrival_mae_minutes:number|null; cost_error_eur:number|null; on_time_pct:number|null; deadline_samples:number; source:string; excluded_records:number;outcomes:ActualEvidence[]; }
 export interface AppSettings { tomtom_configured: boolean; tomtom_masked: string; traffic_status: string; traffic_mode: string; }
