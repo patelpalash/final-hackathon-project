@@ -40,7 +40,7 @@ BASIS_LABEL = {
 
 def _direct_option(options):
     """The direct road option (origin → destination, no intermediate hub)."""
-    return next((o for o in options or [] if len(o.get("path") or []) == 2), None)
+    return next((o for o in options or [] if len(o.get("path") or []) == 2 and o.get("avoidance_status")!="CLEAR"), None)
 
 
 def _same_planning_pass(plan, options):
@@ -53,6 +53,8 @@ def _same_planning_pass(plan, options):
     revision before we trust the set's direct option as its baseline.
     """
     for option in options or []:
+        if plan.get("quote_id") and option.get("quote_id")!=plan["quote_id"]:
+            continue
         if (option.get("path") == plan.get("path")
                 and option.get("total_minutes") == plan.get("total_minutes")
                 and option.get("revision") == plan.get("revision")
@@ -93,284 +95,74 @@ def _time_value(minutes):
     return round(minutes / 60.0 * VALUE_OF_TIME_EUR_PER_HOUR, 2)
 
 
-def shipment_row(ship, names=None):
-    """One savings row for one shipment, or None if it is not comparable."""
-    comparison, basis = comparison_for(ship)
-    disruption = ship.get("disruption_savings") or {}
+def is_demo(ship):
+    return bool(ship.get("data_kind")=="demo" or ship.get("demo_session") or (ship.get("accepted_plan") or {}).get("is_demo"))
 
-    money = round(comparison["money_saved_eur"], 2) if comparison else 0.0
-    fuel = round(comparison["fuel_saved_l"], 1) if comparison else 0.0
-    minutes = round(comparison["minutes_saved"]) if comparison else 0
-    time_value = _time_value(minutes) if comparison else 0.0
 
-    avoided_minutes = round(disruption.get("minutes_avoided", 0))
-    avoided_value = _time_value(avoided_minutes) if avoided_minutes else 0.0
-    # Re-routing around a disruption can legitimately cost more to transport.
-    reroute_cost = round(disruption.get("cost_delta_eur", 0), 2)
-    disruption_eur = round(avoided_value - reroute_cost, 2) if disruption else 0.0
-    exposure = round(disruption.get("exposure_avoided_eur", 0), 2)
-
-    if comparison is None and not disruption:
-        return {
-            "id": ship["id"], "container": ship.get("container"),
-            "route": [(names or {}).get(n, n) for n in ship.get("route", [])],
-            "status": ship.get("status"), "basis": BASIS_LEGACY, "basis_label": BASIS_LABEL[BASIS_LEGACY],
-            "money_eur": 0.0, "fuel_l": 0.0, "time_min": 0, "time_value_eur": 0.0,
-            "disruption_eur": 0.0, "exposure_avoided_eur": 0.0, "benefit_eur": 0.0,
-            "comparable": False, "disruption": None,
-        }
-
+def shipment_row(ship, names=None, demo=False):
+    """A traceable estimate, never proof of realized financial savings."""
+    plan=ship.get("accepted_plan") or {}
+    comparison,basis=comparison_for(ship)
+    excluded=None
+    if not demo and not ship.get("approved_at"):
+        excluded="Awaiting manager approval"
+    elif ship.get("hold") or ship.get("status")=="ON HOLD":
+        excluded="Shipment is on hold"
+    elif not comparison:
+        excluded="No matching baseline for this approved plan"
+    comparable=excluded is None
+    comparison=comparison if comparable else None
+    disruption=ship.get("disruption_savings") or {}
+    # A previous reroute's benefit cannot be attributed to a later approval.
+    if (not comparable or not plan.get("quote_id") or
+            disruption.get("approved_quote_id")!=plan["quote_id"]):
+        disruption={}
+    money=round(comparison["money_saved_eur"],2) if comparison else 0.0
+    fuel=round(comparison["fuel_saved_l"],1) if comparison else 0.0
+    minutes=round(comparison["minutes_saved"]) if comparison else 0
+    time_value=_time_value(minutes)
+    avoided_minutes=round(disruption.get("minutes_avoided",0))
+    disruption_value=round(_time_value(avoided_minutes)-disruption.get("cost_delta_eur",0),2) if disruption else 0.0
     return {
-        "id": ship["id"], "container": ship.get("container"),
-        "route": [(names or {}).get(n, n) for n in ship.get("route", [])],
-        "status": ship.get("status"), "basis": basis, "basis_label": BASIS_LABEL[basis],
-        "money_eur": money, "fuel_l": fuel, "time_min": minutes, "time_value_eur": time_value,
-        "disruption_eur": disruption_eur, "exposure_avoided_eur": exposure,
-        "benefit_eur": round(money + time_value + disruption_eur + exposure, 2),
-        "comparable": True,
-        "disruption": {**disruption, "value_eur": disruption_eur, "minutes_avoided": avoided_minutes} if disruption else None,
+        "id":ship["id"],"container":ship.get("container"),
+        "route":[(names or {}).get(n,n) for n in ship.get("route",[])],
+        "status":ship.get("status"),"data_kind":"demo" if demo else "estimated",
+        "basis":basis,"basis_label":"Simulated plan comparison" if demo and comparable else BASIS_LABEL[basis],
+        "money_eur":money,"fuel_l":fuel,"time_min":minutes,"time_value_eur":time_value,
+        "disruption_eur":disruption_value,"exposure_avoided_eur":round(disruption.get("exposure_avoided_eur",0),2),
+        # One baseline only. Reroute comparisons and cargo value are NOT added.
+        "benefit_eur":round(money+time_value,2),"comparable":comparable,"excluded_reason":excluded,
+        "disruption":{**disruption,"value_eur":disruption_value,"minutes_avoided":avoided_minutes} if disruption else None,
+        "evidence":{"quote_id":plan.get("quote_id"),"approved_at":ship.get("approved_at"),
+                    "manager_reason":ship.get("approval_reason"),"evaluated_at":plan.get("evaluated_at"),
+                    "baseline":(comparison or {}).get("baseline"),"source":plan.get("data_sources",{}).get("transport"),
+                    "revision":plan.get("revision"),"arrival":plan.get("eta"),
+                    "outcome_recorded":bool(ship.get("actual"))},
     }
 
 
-DUMMY_SAVINGS_ROWS = [
-    {
-        "id": "SHP-DACH-8821",
-        "container": "C-48192 · 13.6 LDM",
-        "route": ["Hamburg", "Langenau", "München"],
-        "status": "DELIVERED",
-        "basis": BASIS_QUOTE,
-        "basis_label": BASIS_LABEL[BASIS_QUOTE],
-        "money_eur": 680.0,
-        "fuel_l": 185.0,
-        "time_min": 195,
-        "time_value_eur": 162.50,
-        "disruption_eur": 0.0,
-        "exposure_avoided_eur": 0.0,
-        "benefit_eur": 842.50,
-        "comparable": True,
-        "disruption": None,
-    },
-    {
-        "id": "SHP-DACH-7742",
-        "container": "C-91024 · 12.0 LDM",
-        "route": ["Karlsruhe", "Chemnitz", "Dresden"],
-        "status": "DELIVERED",
-        "basis": BASIS_DERIVED,
-        "basis_label": BASIS_LABEL[BASIS_DERIVED],
-        "money_eur": 260.0,
-        "fuel_l": 75.0,
-        "time_min": 0,
-        "time_value_eur": 0.0,
-        "disruption_eur": 450.0,
-        "exposure_avoided_eur": 1200.0,
-        "benefit_eur": 1910.0,
-        "comparable": True,
-        "disruption": {
-            "basis": "Re-routed via A7/A4 around A81 corridor obstruction (+180m delay avoided)",
-            "counterfactual_eta": "2026-09-20T23:30:00Z",
-            "approved_eta": "2026-09-20T20:30:00Z",
-            "value_eur": 450.0,
-            "minutes_avoided": 180,
-            "cost_delta_eur": 35.0,
-            "exposure_avoided_eur": 1200.0,
-        },
-    },
-    {
-        "id": "SHP-DACH-6619",
-        "container": "C-33821 · 10.5 LDM",
-        "route": ["Frankfurt", "Kornwestheim", "Stuttgart"],
-        "status": "DELIVERED",
-        "basis": BASIS_QUOTE,
-        "basis_label": BASIS_LABEL[BASIS_QUOTE],
-        "money_eur": 420.0,
-        "fuel_l": 140.0,
-        "time_min": 105,
-        "time_value_eur": 87.50,
-        "disruption_eur": 0.0,
-        "exposure_avoided_eur": 0.0,
-        "benefit_eur": 507.50,
-        "comparable": True,
-        "disruption": None,
-    },
-    {
-        "id": "SHP-DACH-5593",
-        "container": "C-77190 · 13.6 LDM",
-        "route": ["Köln", "Karlsruhe", "Basel"],
-        "status": "DELIVERED",
-        "basis": BASIS_DERIVED,
-        "basis_label": BASIS_LABEL[BASIS_DERIVED],
-        "money_eur": 530.0,
-        "fuel_l": 165.0,
-        "time_min": 150,
-        "time_value_eur": 125.00,
-        "disruption_eur": 0.0,
-        "exposure_avoided_eur": 0.0,
-        "benefit_eur": 655.00,
-        "comparable": True,
-        "disruption": None,
-    },
-    {
-        "id": "SHP-DACH-4481",
-        "container": "C-12948 · 8.0 LDM",
-        "route": ["Berlin", "Langenau", "Nürnberg"],
-        "status": "DELIVERED",
-        "basis": BASIS_QUOTE,
-        "basis_label": BASIS_LABEL[BASIS_QUOTE],
-        "money_eur": 310.0,
-        "fuel_l": 95.0,
-        "time_min": 75,
-        "time_value_eur": 62.50,
-        "disruption_eur": 0.0,
-        "exposure_avoided_eur": 0.0,
-        "benefit_eur": 372.50,
-        "comparable": True,
-        "disruption": None,
-    },
-    {
-        "id": "SHP-DACH-3320",
-        "container": "C-55829 · 11.2 LDM",
-        "route": ["Bremen", "Hannover", "Leipzig"],
-        "status": "DELIVERED",
-        "basis": BASIS_DERIVED,
-        "basis_label": BASIS_LABEL[BASIS_DERIVED],
-        "money_eur": 190.0,
-        "fuel_l": 60.0,
-        "time_min": 0,
-        "time_value_eur": 0.0,
-        "disruption_eur": 300.0,
-        "exposure_avoided_eur": 850.0,
-        "benefit_eur": 1340.0,
-        "comparable": True,
-        "disruption": {
-            "basis": "Re-routed around A2 construction bottleneck (+120m delay avoided)",
-            "counterfactual_eta": "2026-09-20T19:15:00Z",
-            "approved_eta": "2026-09-20T17:15:00Z",
-            "value_eur": 300.0,
-            "minutes_avoided": 120,
-            "cost_delta_eur": 40.0,
-            "exposure_avoided_eur": 850.0,
-        },
-    },
-    {
-        "id": "SHP-DACH-2215",
-        "container": "C-88123 · 6.5 LDM",
-        "route": ["Mannheim", "Rastatt", "Freiburg"],
-        "status": "DELIVERED",
-        "basis": BASIS_QUOTE,
-        "basis_label": BASIS_LABEL[BASIS_QUOTE],
-        "money_eur": 195.0,
-        "fuel_l": 65.0,
-        "time_min": 60,
-        "time_value_eur": 50.00,
-        "disruption_eur": 0.0,
-        "exposure_avoided_eur": 0.0,
-        "benefit_eur": 245.00,
-        "comparable": True,
-        "disruption": None,
-    },
-    {
-        "id": "SHP-DACH-1194",
-        "container": "C-66382 · 13.6 LDM",
-        "route": ["Dortmund", "Kassel", "Erfurt"],
-        "status": "DELIVERED",
-        "basis": BASIS_QUOTE,
-        "basis_label": BASIS_LABEL[BASIS_QUOTE],
-        "money_eur": 460.0,
-        "fuel_l": 150.0,
-        "time_min": 300,
-        "time_value_eur": 250.00,
-        "disruption_eur": 0.0,
-        "exposure_avoided_eur": 0.0,
-        "benefit_eur": 710.00,
-        "comparable": True,
-        "disruption": None,
-    },
-    {
-        "id": "SHP-DACH-9052",
-        "container": "C-20411 · 12.5 LDM",
-        "route": ["Ulm", "Ingolstadt", "Regensburg"],
-        "status": "DELIVERED",
-        "basis": BASIS_QUOTE,
-        "basis_label": BASIS_LABEL[BASIS_QUOTE],
-        "money_eur": 340.0,
-        "fuel_l": 110.0,
-        "time_min": 90,
-        "time_value_eur": 75.00,
-        "disruption_eur": 0.0,
-        "exposure_avoided_eur": 0.0,
-        "benefit_eur": 415.00,
-        "comparable": True,
-        "disruption": None,
-    },
-    {
-        "id": "SHP-DACH-4103",
-        "container": "C-73902 · 13.0 LDM",
-        "route": ["Kornwestheim", "Würzburg", "Frankfurt"],
-        "status": "DELIVERED",
-        "basis": BASIS_DERIVED,
-        "basis_label": BASIS_LABEL[BASIS_DERIVED],
-        "money_eur": 180.0,
-        "fuel_l": 55.0,
-        "time_min": 0,
-        "time_value_eur": 0.0,
-        "disruption_eur": 350.0,
-        "exposure_avoided_eur": 950.0,
-        "benefit_eur": 1480.0,
-        "comparable": True,
-        "disruption": {
-            "basis": "Re-routed around A3 accident clearance (+140m delay avoided)",
-            "counterfactual_eta": "2026-09-20T21:40:00Z",
-            "approved_eta": "2026-09-20T19:20:00Z",
-            "value_eur": 350.0,
-            "minutes_avoided": 140,
-            "cost_delta_eur": 25.0,
-            "exposure_avoided_eur": 950.0,
-        },
-    },
-]
-
-
-def summary(ships, names=None):
-    """Aggregate savings across every non-demo shipment plus foundational operational baselines."""
-    rows, legacy = [], 0
-    for ship in ships:
-        if ship.get("data_kind") == "demo":
-            continue
-        row = shipment_row(ship, names)
-        if not row["comparable"]:
-            legacy += 1
-        rows.append(row)
-
-    # Merge in curated baseline operational rows so numbers reflect realistic European operations
-    all_rows = DUMMY_SAVINGS_ROWS + rows
-    counted = [r for r in all_rows if r["comparable"]]
-    total = {
-        "money_eur": round(sum(r["money_eur"] for r in counted), 2),
-        "fuel_l": round(sum(r["fuel_l"] for r in counted), 1),
-        "time_min": round(sum(r["time_min"] for r in counted)),
-        "optimized": len(counted),
-        "time_value_eur": round(sum(r["time_value_eur"] for r in counted), 2),
-        "disruption_eur": round(sum(r["disruption_eur"] for r in counted), 2),
-        "exposure_avoided_eur": round(sum(r["exposure_avoided_eur"] for r in counted), 2),
-    }
-    total["economic_benefit_eur"] = round(
-        total["money_eur"] + total["time_value_eur"] + total["disruption_eur"] + total["exposure_avoided_eur"], 2)
-    total["fuel_eur"] = round(total["fuel_l"] * DIESEL_EUR_PER_L, 2)
-    rerouted = [r for r in counted if r["disruption_eur"] or r["exposure_avoided_eur"]]
-
+def summary(ships, names=None, scope="estimated"):
+    if scope not in {"estimated","demo"}:raise ValueError("Unknown savings scope")
+    demo=scope=="demo"
+    selected=[s for s in ships if is_demo(s)==demo]
+    rows=[shipment_row(s,names,demo) for s in selected]
+    counted=[r for r in rows if r["comparable"]]
+    keys=("money_eur","fuel_l","time_min","time_value_eur","disruption_eur","exposure_avoided_eur")
+    total={k:round(sum(r[k] for r in counted),2) for k in keys}
+    total["optimized"]=len(counted)
+    total["economic_benefit_eur"]=round(total["money_eur"]+total["time_value_eur"],2)
+    total["fuel_eur"]=round(total["fuel_l"]*DIESEL_EUR_PER_L,2)
     return {
-        "total": total,
-        "avg_per_shipment_eur": round(total["economic_benefit_eur"] / max(1, len(counted)), 2),
-        "per_shipment": sorted(all_rows, key=lambda r: -r["benefit_eur"]),
-        "legacy_count": legacy,
-        "rerouted_count": len(rerouted),
-        "assumptions": {
-            "value_of_time_eur_per_hour": VALUE_OF_TIME_EUR_PER_HOUR,
-            "note": "Transit hours are valued at the same EUR 50/hour used by the balanced ranking objective. "
-                    "It is a planning valuation for comparison, not an invoiced amount.",
-        },
-        "note": "Estimated, not guaranteed. Signed estimates against each shipment's own direct road option, plus the "
-                "delay avoided when a manager approved a re-route under changed conditions. Negative values mean added "
-                "cost, fuel or time.",
-        "source": "relationen.csv tariffs + stored plans; no figure is extrapolated beyond the saved option sets",
+        "scope":scope,"total":total,"avg_per_shipment_eur":round(total["economic_benefit_eur"]/len(counted),2) if counted else 0,
+        "per_shipment":sorted(rows,key=lambda r:(not r["comparable"],-r["benefit_eur"],r["id"])),
+        "legacy_count":sum(r["excluded_reason"]=="No matching baseline for this approved plan" for r in rows),
+        "excluded_count":len(rows)-len(counted),"unapproved_count":sum(not s.get("approved_at") for s in selected),
+        "demo_excluded_count":sum(is_demo(s) for s in ships) if not demo else 0,
+        "rerouted_count":sum(bool(r["disruption"]) for r in counted),
+        "assumptions":{"value_of_time_eur_per_hour":VALUE_OF_TIME_EUR_PER_HOUR,
+                       "note":"Planning value = transport estimate difference + transit hours saved x EUR 50/hour. "
+                              "Fuel value, reroute comparisons and cargo value are shown separately and are not added to that total."},
+        "note":"Signed planning estimates, not realized savings. Negative values mean additional cost, time or fuel.",
+        "source":"Saved demo scenarios only; excluded from operational results" if demo else
+                 "Manager-approved, non-demo plans and their own stored baselines. Held and unapproved plans are excluded from totals.",
     }

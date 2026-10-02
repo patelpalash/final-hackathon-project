@@ -267,7 +267,7 @@ class Shipments:
         _save(self.data)
         return ship
 
-    def schedule(self, sid, option_index=0, force=False, quote_id=None):
+    def schedule(self, sid, option_index=0, force=False, quote_id=None, decision_reason=None):
         s = self.data.get(sid)
         if not s:
             return None, "unknown shipment"
@@ -299,12 +299,17 @@ class Shipments:
         # What would have happened had we kept the previously approved path? The
         # counterfactual is that same path re-evaluated under the CURRENT
         # conditions, which is exactly what this option set already contains.
-        previous = (s.get("accepted_plan") or {}).get("path")
-        if previous and previous != approved["path"]:
-            stayed = next((o for o in fresh if o["path"] == previous), None)
+        previous_plan=s.get("accepted_plan") or {}
+        previous=previous_plan.get("path")
+        # An initial proposal is not an approved counterfactual. Each approval
+        # replaces the attribution instead of carrying stale benefits forward.
+        s.pop("disruption_savings",None)
+        if s.get("approved_at") and previous and previous_plan.get("route_id")!=approved.get("route_id"):
+            stayed = next((o for o in fresh if o.get("route_id")==previous_plan.get("route_id")), None)
             if stayed:
                 rescued = bool(approved["risk"]["deadline_ok"]) and not stayed["risk"]["deadline_ok"]
                 s["disruption_savings"] = {
+                    "approved_quote_id":approved.get("quote_id"),
                     "minutes_avoided": round(stayed["total_minutes"] - approved["total_minutes"]),
                     "cost_delta_eur": round(approved["cost"]["transport_eur"] - stayed["cost"]["transport_eur"], 2),
                     "fuel_delta_l": round(approved["cost"]["fuel_l"] - stayed["cost"]["fuel_l"], 1),
@@ -317,7 +322,7 @@ class Shipments:
                 }
         s["options"] = fresh
         s.pop("hold",None)
-        s.update({"status": "SCHEDULED", "scheduled_departure": next((step["start"] for step in approved["steps"] if step["type"]=="drive"),s["planned_departure"]),
+        s.update({"status": "SCHEDULED", "approval_reason":decision_reason, "scheduled_departure": next((step["start"] for step in approved["steps"] if step["type"]=="drive"),s["planned_departure"]),
                   "route": approved["path"], "current_eta": approved["eta"],
                   "est_cost_eur": approved["cost"]["transport_eur"], "est_fuel_l": approved["cost"]["fuel_l"],
                   "risk_level": approved["risk"]["level"], "selected_option": approved_index, "accepted_plan": deepcopy(approved), "approved_at":datetime.now(timezone.utc).isoformat(), "plan_change":None,

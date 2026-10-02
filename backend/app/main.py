@@ -321,9 +321,9 @@ def set_status(sid: str, status: str):
 
 # ---- dashboards ----
 @app.get("/api/savings")
-def savings():
+def savings(scope: Literal["estimated","demo"] = "estimated"):
     names = {nid: node["name"] for nid, node in S["network"]["nodes"].items()}
-    return savings_engine.summary(S["ships"].list(), names)
+    return savings_engine.summary(S["ships"].list(), names, scope)
 
 
 @app.post("/api/savings/recalculate")
@@ -559,7 +559,7 @@ def decision(req: DecisionReq):
         if req.action=="accept":
             if option.get("avoidance_status") in {"IMPACTED", "NO_CLEAR_DETOUR"}:
                 raise HTTPException(409,"This route crosses an active simulated weather zone. Hold or defer the shipment, or choose a verified clear route.")
-            _, warning=S["ships"].schedule(req.shipment_id,req.option,req.acknowledge_deadline,req.quote_id)
+            _, warning=S["ships"].schedule(req.shipment_id,req.option,req.acknowledge_deadline,req.quote_id,req.reason.strip())
             if warning: raise HTTPException(409,warning)
         elif req.action=="hold":
             S["ships"].hold(req.shipment_id,req.option,req.reason)
@@ -694,7 +694,8 @@ def save_service(req:ServiceReq):
     row=S["operations"].put("schedules",{**req.model_dump(),"source":"USER-ENTERED TIMETABLE / availability unverified"})
     _audit("service_added",f"{req.origin} → {req.destination} {req.departure_time}","MANAGER INPUT")
     return row
-@app.delete("/api/services/{rid}")
+
+@app.delete("/api/services/{rid}")
 @serialized
 def delete_service(rid:str):
     S["operations"].remove("schedules",rid)
@@ -719,21 +720,10 @@ def outcome(sid:str,req:OutcomeReq):
 
 @app.get("/api/performance")
 def performance():
-    rows=[s["actual"] for s in S["ships"].list() if s.get("actual") and s.get("data_kind")!="demo"]
-    if len(rows) < 5:
-        return {
-            "samples": 34,
-            "minimum_samples": 5,
-            "status": "MEASURED",
-            "arrival_mae_minutes": 11.4,
-            "cost_error_eur": -28.60,
-            "on_time_pct": 97.1,
-            "deadline_samples": 34,
-            "source": "Audited delivery telemetry & completed shipment confirmations"
-        }
-    deadlines=[r for r in rows if r["on_time"] is not None]
-    enough=len(rows)>=5
-    return {"samples":len(rows),"minimum_samples":5,"status":"MEASURED" if enough else "INSUFFICIENT_DATA","arrival_mae_minutes":round(sum(abs(r["arrival_error_minutes"]) for r in rows)/len(rows),1) if enough else None,"cost_error_eur":round(sum(r["cost_error_eur"] for r in rows)/len(rows),2) if enough else None,"on_time_pct":round(100*sum(r["on_time"] for r in deadlines)/len(deadlines),1) if len(deadlines)>=5 else None,"deadline_samples":len(deadlines),"source":"User-reported completed deliveries; demo outcomes excluded"}
+    from .performance import summary
+    names={nid:node["name"] for nid,node in S["network"]["nodes"].items()}
+    return summary(S["ships"].list(),names)
+
 
 @app.post("/api/demo/start")
 @serialized
