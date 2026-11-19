@@ -18,7 +18,7 @@ const routeClear=(o?:RouteOption)=>!!o&&o.route_feasible!==false&&o.capacity?.fe
 const groupOf=(s:Shipment):QueueGroup=>s.status==="ON HOLD"||s.hold||s.plan_change?.material||["CRITICAL","HIGH"].includes(s.dispatch?.priority??"")?"review":!s.approved_at?"planned":s.status==="ARRIVAL EXPECTED"||s.dispatch?.priority==="REVIEW"?"review":"active";
 const groupLabel=(s:Shipment)=>({planned:"Planned",review:"Review required",active:"Active",all:"All"}[groupOf(s)]);
 
-export function ControlRoom({nodes,onChange,refreshKey=0,active=true,savedJourney,reviewRequest,onSaved}:{nodes:NetNode[];onChange:()=>void;refreshKey?:number;active?:boolean;savedJourney?:Shipment|null;reviewRequest?:{id:string;version:number}|null;onSaved?:(s:Shipment)=>void}){
+export function ControlRoom({nodes,onChange,refreshKey=0,active=true,savedJourney,reviewRequest,onSaved,onOperations}:{nodes:NetNode[];onChange:()=>void;refreshKey?:number;active?:boolean;savedJourney?:Shipment|null;reviewRequest?:{id:string;version:number}|null;onSaved?:(s:Shipment)=>void;onOperations?:(ops:Operations)=>void}){
  const [ships,setShips]=useState<Shipment[]>([]),[ops,setOps]=useState<Operations|null>(null),[detail,setDetail]=useState<Shipment|null>(null);
  const [sel,setSel]=useState(0),[decidedBy,setDecidedBy]=useState(()=>{try{return localStorage.getItem("dachser-decided-by")??""}catch{return ""}}),[reason,setReason]=useState(""),[ack,setAck]=useState(false),[busy,setBusy]=useState(false);
  const [err,setErr]=useState(""),[msg,setMsg]=useState(""),[filter,setFilter]=useState<QueueGroup>("all"),[creating,setCreating]=useState(false);
@@ -38,11 +38,18 @@ export function ControlRoom({nodes,onChange,refreshKey=0,active=true,savedJourne
  // remount (React StrictMode does this in development) opens it again instead of
  // leaving a cancelled review holding `busy` forever.
  useEffect(()=>{alive.current=true;setBusy(false);return()=>{alive.current=false;reviewId.current++;openedSaved.current=""}},[]);
- const load=useCallback(async()=>{const request=++loadId.current;try{const [s,o]=await Promise.all([api.shipments(),api.operations()]);if(alive.current&&request===loadId.current){
-  const listed=new Set(s.shipments.map(x=>x.id));const now=Date.now();const kept:Shipment[]=[];
+ const load=useCallback(async()=>{const request=++loadId.current;try{const {shipments,operations}=await api.controlRoom();if(alive.current&&request===loadId.current){
+  const listed=new Set(shipments.map(x=>x.id));const now=Date.now();const kept:Shipment[]=[];
   pinned.current.forEach((pin,id)=>{if(listed.has(id)||now-pin.at>120000)pinned.current.delete(id);else kept.push(pin.ship)});
-  setShips([...kept,...s.shipments].filter(x=>x.status!=="DELIVERED").sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at)));setOps(o);setQueueError(false)}}catch{if(alive.current&&request===loadId.current)setQueueError(true)}},[]);
- useEffect(()=>{if(!active)return;void load();const timer=window.setInterval(()=>{if(!document.hidden&&!decisionInFlight.current)void load()},30000);return()=>clearInterval(timer)},[active,refreshKey,load]);
+  setShips([...kept,...shipments].filter(x=>x.status!=="DELIVERED").sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at)));setOps(operations);onOperations?.(operations);setQueueError(false)}}catch{if(alive.current&&request===loadId.current)setQueueError(true)}},[onOperations]);
+ useEffect(()=>{
+  if(!active)return;
+  const refresh=()=>{if(!document.hidden&&!decisionInFlight.current)void load()};
+  refresh();
+  const timer=window.setInterval(refresh,60000);
+  document.addEventListener("visibilitychange",refresh);
+  return()=>{loadId.current++;clearInterval(timer);document.removeEventListener("visibilitychange",refresh)};
+ },[active,refreshKey,load]);
  useEffect(()=>{if(savedJourney){pinned.current.set(savedJourney.id,{ship:savedJourney,at:Date.now()});setShips(prev=>[savedJourney,...prev.filter(s=>s.id!==savedJourney.id)])}},[savedJourney]);
  async function review(id:string,recalculate=false,decisionToRevise?:Decision){
   if(busy)return;const request=++reviewId.current;setBusy(true);setErr("");setMsg("");setCreating(false);

@@ -31,6 +31,7 @@ export const api = {
   demoDisruption:(id:string)=>req<Shipment>(`/demo/${id}/disruption`,{method:"POST"}),
   mapConditions: (geometry:number[][], at:string, signal?: AbortSignal) => req<MapConditions>("/map-conditions",{method:"POST",body:JSON.stringify({geometry,at}),signal}),
   operations: () => req<Operations>("/operations"),
+  controlRoom: () => req<{ shipments: Shipment[]; operations: Operations }>("/control-room"),
   addWeatherZone:(body:WeatherZoneInput)=>req<WeatherZone>("/weather-zones",{method:"POST",body:JSON.stringify(body)}),
   updateWeatherZone:(id:string,body:WeatherZoneInput)=>req<WeatherZone>(`/weather-zones/${id}`,{method:"PUT",body:JSON.stringify(body)}),
   deleteWeatherZone:(id:string)=>req<{ok:boolean}>(`/weather-zones/${id}`,{method:"DELETE"}),

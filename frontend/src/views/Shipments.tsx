@@ -8,7 +8,7 @@ import { ActualOutcome } from "../components/ActualOutcome";
 import { PlanChangeNotice } from "../components/PlanChangeNotice";
 import { RouteCompare } from "../components/RouteCompare";
 
-export function Shipments({ nodes, ops }: { nodes: NetNode[]; ops: Operations|null }) {
+export function Shipments({ nodes, ops, active = true }: { nodes: NetNode[]; ops: Operations|null; active?: boolean }) {
   const [ships, setShips] = useState<Shipment[]>([]);
   const [f, setF] = useState({ status: "", at_risk: false, high_value: false, delayed: false });
   const [creating, setCreating] = useState(false);
@@ -23,10 +23,11 @@ export function Shipments({ nodes, ops }: { nodes: NetNode[]; ops: Operations|nu
     api.shipments("?" + q.toString()).then((r) => setShips(r.shipments)).catch(() => {});
   }
   useEffect(() => {
+    if (!active) return;
     load();
-    const timer = window.setInterval(load, 60_000);
+    const timer = window.setInterval(() => { if (!document.hidden) load(); }, 60_000);
     return () => window.clearInterval(timer);
-  }, [f]);
+  }, [active, f]);
   return (
     <>
       <div className="card">

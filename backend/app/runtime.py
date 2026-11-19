@@ -4,6 +4,7 @@ import tempfile
 import gzip
 import json
 from pathlib import Path
+from .persistence import configured
 
 
 def configure_runtime():
@@ -42,7 +43,7 @@ def deployment_info():
     cloud=os.environ.get("VERCEL")=="1"
     manifest=Path(__file__).resolve().parents[2]/"data"/"hosted_snapshot.manifest.json"
     snapshot=json.loads(manifest.read_text(encoding="utf-8")) if cloud and manifest.exists() else None
-    if os.environ.get("DATABASE_URL"):
+    if configured():
         return {"hosting":"vercel" if cloud else "local","storage":"postgres","snapshot":snapshot,"message":None}
     return {"hosting":"vercel" if cloud else "local","storage":"ephemeral" if cloud else "local","snapshot":snapshot,
             "message":("Previous dataset restored. New changes may reset to that snapshot or differ across server instances; shared persistent storage is not connected." if snapshot else "Temporary hosted demo: saved journeys and scenarios may reset or differ across server instances. Use local storage for persistent prototype records.") if cloud else None}

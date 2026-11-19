@@ -43,6 +43,7 @@ export default function App() {
   useEffect(()=>{const navigate=()=>{const id=window.location.hash.slice(1).split("/")[0];if(TABS.some(t=>t.id===id)){setTab(id);setVisited(prev=>prev.has(id)?prev:new Set(prev).add(id));window.dispatchEvent(new Event("resize"));}};window.addEventListener("hashchange",navigate);return()=>window.removeEventListener("hashchange",navigate)},[]);
 
   const refresh = () => setTick((t) => t + 1);
+  const controlActive = tab === "control";
   useEffect(() => {
     let alive = true;
     api.network().then((n) => { if (alive) setNet(n); }).catch((e) => { if (alive) setErr(String(e)); });
@@ -55,16 +56,18 @@ export default function App() {
       if (pending) return;
       pending = true;
       try {
-        const [p, o] = await Promise.all([api.providers(), api.operations()]);
-        if (alive) { setProviders(p.providers); setOps(o); setErr(""); }
+        const [p, o] = await Promise.all([api.providers(), controlActive ? null : api.operations()]);
+        if (alive) { setProviders(p.providers); if (o) setOps(o); setErr(""); }
       } catch (e) {
         if (alive) setErr(String(e));
       } finally { pending = false; }
     };
     void load();
-    const timer = setInterval(() => { if (!document.hidden) void load(); }, 30000);
-    return () => { alive = false; clearInterval(timer); };
-  }, [tick]);
+    const refreshVisible = () => { if (!document.hidden) void load(); };
+    const timer = setInterval(refreshVisible, 60000);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => { alive = false; clearInterval(timer); document.removeEventListener("visibilitychange", refreshVisible); };
+  }, [tick, controlActive]);
   const nodes = net?.nodes ?? [];
   const alerts = ops?.weather.filter((w) => w.alert && Date.parse(w.end) > Date.now()) ?? [];
 
@@ -122,10 +125,10 @@ export default function App() {
           )}
         </div>
         <div style={{ display: tab === "control" ? "block" : "none" }}>
-          {visited.has("control") && <ControlRoom nodes={nodes} onChange={refresh} refreshKey={tick} active={tab==="control"} savedJourney={savedJourney} reviewRequest={reviewRequest} onSaved={saved} />}
+          {visited.has("control") && <ControlRoom nodes={nodes} onChange={refresh} refreshKey={tick} active={controlActive} savedJourney={savedJourney} reviewRequest={reviewRequest} onSaved={saved} onOperations={setOps} />}
         </div>
         <div style={{ display: tab === "shipments" ? "block" : "none" }}>
-          {visited.has("shipments") && <Shipments nodes={nodes} ops={ops} />}
+          {visited.has("shipments") && <Shipments nodes={nodes} ops={ops} active={tab==="shipments"} />}
         </div>
         <div style={{ display: tab === "analytics" ? "block" : "none" }}>
           {visited.has("analytics") && (

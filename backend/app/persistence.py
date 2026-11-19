@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 _connection = ContextVar("planner_database_connection", default=None)
 _writing = ContextVar("planner_database_write", default=False)
@@ -32,8 +33,18 @@ class StorageUnavailable(RuntimeError):
     pass
 
 
+def database_url():
+    supabase_url = os.environ.get("DACHSER_POSTGRES_URL")
+    if not supabase_url:
+        return os.environ.get("DATABASE_URL")
+    url = urlsplit(supabase_url)
+    # Supabase's Marketplace adds a client-specific tag that libpq rejects.
+    parameters = [(key, value) for key, value in parse_qsl(url.query, keep_blank_values=True) if key != "supa"]
+    return url._replace(query=urlencode(parameters)).geturl()
+
+
 def configured():
-    return bool(os.environ.get("DATABASE_URL"))
+    return bool(database_url())
 
 def writing():
     return _writing.get()
@@ -105,7 +116,7 @@ def session(write=False):
         yield
         return
     import psycopg
-    url = os.environ["DATABASE_URL"]
+    url = database_url()
     initialize(url)
     try:
         connection, pooled = _acquire(url)
@@ -173,7 +184,9 @@ def load(key, fallback, force=False):
             connection.execute("INSERT INTO dachser_state(name,payload) VALUES(%s,%s) ON CONFLICT DO NOTHING", (key, encode(fallback)))
             row = connection.execute("SELECT version FROM dachser_state WHERE name=%s", (key,)).fetchone()
         if not force and _versions.get(key) == row[0]: return None
-        payload, version = connection.execute("SELECT payload,version FROM dachser_state WHERE name=%s", (key,)).fetchone()
+        payload, version = connection.execute(
+            "SELECT payload,version FROM dachser_state WHERE name=%s", (key,), binary=True
+        ).fetchone()
         _versions[key] = version
         return json.loads(zlib.decompress(bytes(payload)))
 
@@ -205,7 +218,11 @@ def load_many(fallbacks, prefix=None):
         changed = [k for k in [*keys, *present] if versions[k] is None or _versions.get(k) != versions[k]]
         out = {}
         if changed:
-            for name, payload, version in connection.execute("SELECT name,payload,version FROM dachser_state WHERE name = ANY(%s)", (changed,)).fetchall():
+            # The binary result avoids PostgreSQL hex-encoding every compressed payload.
+            rows = connection.execute(
+                "SELECT name,payload,version FROM dachser_state WHERE name = ANY(%s)", (changed,), binary=True
+            ).fetchall()
+            for name, payload, version in rows:
                 _versions[name] = version
                 raw = zlib.decompress(bytes(payload))
                 if prefix and name.startswith(prefix):
@@ -224,7 +241,9 @@ def load_ships(fallback):
     with session(write=True):
         connection = _connection.get()
         if connection.execute("SELECT 1 FROM dachser_state WHERE name=%s", (SHIPS_MIGRATED,)).fetchone() is None:
-            row = connection.execute("SELECT payload FROM dachser_state WHERE name='shipments.json'").fetchone()
+            row = connection.execute(
+                "SELECT payload FROM dachser_state WHERE name='shipments.json'", binary=True
+            ).fetchone()
             legacy = json.loads(zlib.decompress(bytes(row[0]))) if row else fallback
             for sid, ship in (legacy or {}).items():
                 connection.execute("INSERT INTO dachser_state(name,payload) VALUES(%s,%s) ON CONFLICT DO NOTHING",

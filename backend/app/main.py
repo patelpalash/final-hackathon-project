@@ -61,6 +61,18 @@ def _ctx():
             "operations": S["operations"],"capacity_shipments":list(S["ships"].data.values()) if "ships" in S else []}
 
 
+def ensure_runtime_state():
+    with LOCK:
+        if "ships" in S:
+            return
+        S["operations"] = Operations()
+        S["hub_delays"] = S["operations"].data.setdefault("hub_delays", {})
+        ships = Shipments(_ctx())
+        if os.environ.get("SEED_DEMO_SHIPMENTS", "1") == "1":
+            ships.seed_if_empty()
+        S["ships"] = ships
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not DATA_DIR or not os.path.isdir(DATA_DIR):
@@ -77,13 +89,12 @@ async def lifespan(app: FastAPI):
     S["savings_scenarios"] = SavingsScenarios(DATA_DIR)
     S["disruptions"] = an.disruptions(DATA_DIR)
     S["providers"] = Providers(S["holidays"])
-    S["operations"] = Operations()
-    S["hub_delays"] = S["operations"].data.setdefault("hub_delays", {})
+    S.pop("ships", None)
     S["audit"] = []
-    S["ships"] = Shipments(_ctx())
-    if os.environ.get("SEED_DEMO_SHIPMENTS","1")=="1":S["ships"].seed_if_empty()
+    if not persistence.configured():
+        ensure_runtime_state()
     _audit("startup", f"{len(S['network']['nodes'])} hubs, {len(S['holidays'])} holidays, "
-                      f"{len(S['history'])} lane histories, {len(S['ships'].list())} shipments")
+                      f"{len(S['history'])} lane histories")
     try:
         yield
     finally:
@@ -94,7 +105,12 @@ app = FastAPI(title="DACHSER Live Transit Planner", version="3.0.0", lifespan=li
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(map_tiles_router)
 
-STATELESS_ROUTES={"/api/health","/api/network","/api/providers","/api/holidays","/api/settings","/api/savings/scenarios","/api/transport-calendar"}
+STATELESS_ROUTES={
+    "/api/health", "/api/network", "/api/providers", "/api/holidays", "/api/settings",
+    "/api/settings/tomtom", "/api/savings/scenarios", "/api/transport-calendar",
+    "/api/analytics/relations", "/api/weather", "/api/journey-examples",
+    "/api/audit", "/api/assumptions", "/api/map-conditions",
+}
 STATELESS_PREFIXES=("/api/map-tiles/","/api/traffic-tiles/")
 
 
@@ -103,15 +119,21 @@ async def fresh_api_responses(request,call_next):
     # These endpoints do not read saved journeys or mutable operations data.
     stateless=request.url.path in STATELESS_ROUTES or request.url.path.startswith(STATELESS_PREFIXES)
     started=time.perf_counter();db_ms=0.0
-    if persistence.configured() and not stateless and (request.method=="GET" or request.url.path=="/api/route"):
+    if persistence.configured() and request.url.path.startswith("/api/") and not stateless and request.method != "OPTIONS":
         from starlette.concurrency import run_in_threadpool
-        try:persistence.refreshed.set(await run_in_threadpool(refresh_shared_state))
+        reads_state = request.method == "GET" or request.url.path in {"/api/route", "/api/simulate/reroute"}
+        refresh = refresh_shared_state if reads_state else ensure_runtime_state
+        try:
+            checked = await run_in_threadpool(refresh)
         except persistence.StorageUnavailable:
             # A pooled connection may have been closed by the database; retry once on a fresh one.
             persistence.reset_pool()
-            try:persistence.refreshed.set(await run_in_threadpool(refresh_shared_state))
+            try:
+                checked = await run_in_threadpool(refresh)
             except persistence.StorageUnavailable as exc:
                 return JSONResponse(status_code=503,content={"detail":str(exc)},headers={"Cache-Control":"no-store"})
+        if checked is not None:
+            persistence.refreshed.set(checked)
         db_ms=(time.perf_counter()-started)*1000
     response=await call_next(request)
     if request.url.path.startswith("/api/"):
@@ -122,7 +144,8 @@ async def fresh_api_responses(request,call_next):
 
 
 def refresh_shared_state():
-    if not persistence.configured() or "ships" not in S:return frozenset()
+    ensure_runtime_state()
+    if not persistence.configured():return frozenset()
     from .demo import _sessions
     with LOCK,persistence.session():
         # Saved journeys, operations and every demo session this worker has open: one query.
@@ -631,6 +654,12 @@ def operations():
             event["affected_shipments"]=affected
     result["thresholds"] = THRESHOLDS
     return result
+
+@app.get("/api/control-room")
+def control_room():
+    with LOCK:
+        return {**list_shipments(), "operations": operations()}
+
 
 class WeatherZoneReq(BaseModel):
     kind: Literal["snow", "rain", "tornado"]
