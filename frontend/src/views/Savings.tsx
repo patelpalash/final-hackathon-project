@@ -3,9 +3,33 @@ import { PiggyBank, Fuel, Clock, ShieldCheck, RefreshCw, Download, Loader2 } fro
 import { api } from "../api/client";
 import type { SavingsResp } from "../api/types";
 import { eur, hm, dt } from "../lib";
+import sample from "./savings-sample.json";
 
 function signedHm(n: number) { return (n < 0 ? "−" : "") + hm(Math.abs(n)); }
 function signedEur(n: number) { return (n < 0 ? "−" : "") + eur(Math.abs(n)); }
+
+function SampleShipmentEvidence() {
+  const { example } = sample;
+  const origin = example.route[0];
+  const destination = example.route[example.route.length - 1];
+  return <section className="card evidence-actual" aria-labelledby="sample-evidence">
+    <p className="eyebrow">Sample SQL export</p>
+    <h2 id="sample-evidence">Shipment comparison · {example.shipment}</h2>
+    <p>{sample.comparable} comparable sample plans · {sample.deliveryOutcomes} sample delivery outcomes</p>
+    <div className="table-scroll">
+      <table className="htbl">
+        <thead><tr><th scope="col">Route</th><th scope="col">Transport estimate</th><th scope="col">Transit time</th><th scope="col">Estimated fuel</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Direct · {origin} → {destination}</th><td>{eur(example.direct.transportEur)}</td><td>{hm(example.direct.minutes)}</td><td>{example.direct.fuelL} L</td></tr>
+          <tr><th scope="row">Via hub · {example.route.join(" → ")}</th><td>{eur(example.approved.transportEur)}</td><td>{hm(example.approved.minutes)}</td><td>{example.approved.fuelL} L</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><b>{hm(example.minutesSaved)} saved for {eur(Math.abs(example.transportSavingEur))} extra transport cost.</b> {eur(example.planningValueEur)} modelled planning value at {eur(sample.valueOfTimeEurPerHour)}/hour.</p>
+    <p className="fineprint">Generated shipment records. Figures apply to this sample and are excluded from the approved-plan totals below.</p>
+  </section>;
+}
+
 function csvCell(value: unknown) {
   let text = value == null ? "" : String(value);
   if (typeof value === "string" && /^\s*[=+\-@]/.test(text)) text = "'" + text;
@@ -59,6 +83,7 @@ export function Savings() {
         <button className="btn" disabled={loading || busy || !!error || !rows.length} onClick={exportReport}><Download size={15}/> Export estimates</button>
       </div>
     </div>
+    <SampleShipmentEvidence />
     <details className="card savings-explainer">
       <summary><b>How these numbers are calculated</b> <span className="fineprint">Click to open</span></summary>
       <ol>
